@@ -38,8 +38,6 @@ export default eventHandler(async (event) => {
       }
       const target = redirectWithQuery ? withQuery(link.url, getQuery(event)) : link.url
       return sendRedirect(event, target, +useRuntimeConfig(event).redirectStatusCode)
-    } else if (slug) {
-      return sendRedirect(event, `https://awakening.bg/${slug}`, +useRuntimeConfig(event).redirectStatusCode)
     }
   }
 })
