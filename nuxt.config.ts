@@ -23,7 +23,7 @@ export default defineNuxtConfig({
     redirectStatusCode: '301',
     linkCacheTtl: 60,
     redirectWithQuery: false,
-    homeURL: '',
+    homeURL: '404.err',
     cfAccountId: '',
     cfApiToken: '',
     dataset: 'sink',
@@ -108,6 +108,9 @@ export default defineNuxtConfig({
     },
     baseUrl: '/',
     defaultLocale: 'en-US',
+    bundle: {
+      optimizeTranslationDirective: true,
+    },
   },
   shadcn: {
     /**
@@ -119,5 +122,9 @@ export default defineNuxtConfig({
      * @default "./components/ui"
      */
     componentDir: './app/components/ui',
+  },
+
+  devServer: {
+    host: process.env.REPLIT_DOMAINS?.split(',')[0]
   },
 })

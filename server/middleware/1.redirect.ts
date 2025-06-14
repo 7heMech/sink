@@ -91,6 +91,8 @@ export default eventHandler(async (event) => {
       }
 
       return sendRedirect(event, buildTarget(link.url), +redirectStatusCode)
+    } else if (slug) {
+      return sendRedirect(event, `https://awakening.bg/${slug}`, +redirectStatusCode)
     }
   }
 })

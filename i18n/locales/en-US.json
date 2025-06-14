@@ -153,6 +153,7 @@
     "stats": "'s Stats",
     "trend": "Trend",
     "weekly_trend": "Weekly Trend",
+    "export_csv": "Export CSV",
     "custom_date": "Custom Date",
     "date": "Date",
     "date_range": "Date Range",

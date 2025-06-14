@@ -1,0 +1,24 @@
+modules = ["vue-node-20", "nodejs-20", "web"]
+hidden = ["bun.lock"]
+run = "bun run dev"
+
+disableInstallBeforeRun = true
+
+[nix]
+channel = "unstable"
+packages = ["lint-staged"]
+
+[deployment]
+run = ["sh", "-c", "bun run dev"]
+
+[[ports]]
+localPort = 3000
+externalPort = 80
+exposeLocalhost = true
+
+[[ports]]
+localPort = 3001
+externalPort = 3001
+
+[agent]
+expertMode = true
