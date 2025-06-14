@@ -6,6 +6,7 @@ const { select } = SqlBricks
 
 const MetricsQuerySchema = QuerySchema.extend({
   type: z.string(),
+  // format: z.string().optional(), // REMOVE THIS LINE
 })
 
 function query2sql(query: z.infer<typeof MetricsQuerySchema>, event: H3Event): string {
@@ -19,7 +20,10 @@ function query2sql(query: z.infer<typeof MetricsQuerySchema>, event: H3Event): s
 }
 
 export default eventHandler(async (event) => {
-  const query = await getValidatedQuery(event, MetricsQuerySchema.parse)
-  const sql = query2sql(query, event)
-  return useWAE(event, sql)
+  // The query will no longer have 'format' after validation by the updated schema
+  const query = await getValidatedQuery(event, MetricsQuerySchema.parse);
+  const sql = query2sql(query, event); // query2sql should be the existing one
+
+  // Directly return the data fetched by useWAE (which should be JSON)
+  return useWAE(event, sql);
 })

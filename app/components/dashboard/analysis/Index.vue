@@ -2,6 +2,9 @@
 import { now } from '@internationalized/date'
 import { useUrlSearchParams } from '@vueuse/core'
 import { safeDestr } from 'destr'
+import { useAPI } from '@/utils/api';
+import { toast } from 'vue-sonner';
+import { convertToCSV } from '@/utils/csv'; // ADD THIS IMPORT
 
 defineProps({
   link: {
@@ -9,6 +12,68 @@ defineProps({
     default: () => null,
   },
 })
+
+async function exportCSV() {
+  console.log('Exporting CSV (client-side conversion using util)...');
+  try {
+    const queryParams = {
+      startAt: time.value.startAt,
+      endAt: time.value.endAt,
+      ...filters.value,
+      // format: 'csv', // REMOVED
+      type: 'views', // Still need type for the metrics endpoint
+    };
+
+    Object.keys(queryParams).forEach(key => queryParams[key] === undefined || queryParams[key] === null ? delete queryParams[key] : {});
+
+    // Expect JSON response now
+    const jsonData = await useAPI('/api/stats/metrics', {
+      query: queryParams
+      // Ensure parseResponse is not set to txt => txt, or remove it
+    });
+
+    if (!jsonData || (Array.isArray(jsonData) && jsonData.length === 0)) {
+      console.error('No data returned for CSV export.');
+      toast.info('No data available for export with the current filters.');
+      return;
+    }
+
+    // Ensure jsonData is an array, as convertToCSV_client expects it
+    const dataArray = Array.isArray(jsonData) ? jsonData : (jsonData.data && Array.isArray(jsonData.data) ? jsonData.data : []);
+    if (dataArray.length === 0) {
+         console.error('No data array found in response for CSV export.');
+         toast.info('No data available for export with the current filters.');
+         return;
+    }
+
+    // UPDATE THIS LINE: Call the imported convertToCSV function
+    const csvData = convertToCSV(dataArray);
+
+    if (!csvData.trim()) {
+      console.error('CSV conversion resulted in empty string.');
+      toast.info('No data available to export after conversion.');
+      return;
+    }
+
+    const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'analysis-export.csv');
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    toast.success('CSV export successful. Download has started.');
+    console.log('CSV Export successful (client-side using util).');
+
+  } catch (error) {
+    console.error('Error exporting CSV (client-side using util):', error);
+    toast.error('CSV export failed. Please try again.');
+  }
+}
 
 const searchParams = useUrlSearchParams('history')
 
@@ -73,6 +138,9 @@ onBeforeMount(() => {
         <DashboardDatePicker @update:date-range="changeDate" />
       </DashboardNav>
       <DashboardFilters v-if="!link" @change="changeFilter" />
+      <Button variant="outline" @click="exportCSV">
+        Export CSV
+      </Button>
     </div>
     <DashboardAnalysisCounters />
     <DashboardAnalysisViews />

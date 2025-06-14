@@ -25,6 +25,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "typecheck": "nuxt typecheck",
+    "test": "bun test",
     "wrangler": "wrangler",
     "lint-staged": "lint-staged"
   },
