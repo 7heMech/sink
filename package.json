@@ -3,10 +3,17 @@
   "type": "module",
   "version": "0.2.0",
   "private": true,
-  "packageManager": "pnpm@10.11.0",
   "engines": {
     "node": ">=20.11"
   },
+  "trustedDependencies": [
+    "esbuild",
+    "sharp",
+    "simple-git-hooks",
+    "unrs-resolver",
+    "vue-demi",
+    "workerd"
+  ],
   "scripts": {
     "dev": "nuxt dev",
     "build": "NODE_OPTIONS=--max-old-space-size=8192 nuxt build",
@@ -41,6 +48,7 @@
     "pluralize": "^8.0.0",
     "qr-code-styling": "^1.9.2",
     "radix-vue": "^1.9.17",
+    "std-env": "^3.9.0",
     "ua-parser-js": "^2.0.3",
     "vaul-vue": "^0.4.1",
     "vee-validate": "^4.15.0",

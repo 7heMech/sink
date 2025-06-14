@@ -101,6 +101,7 @@
     "visitors": "Visitors",
     "referers": "Referers",
     "stats": "'s Stats",
+    "export_csv": "Export CSV",
     "custom_date": "Custom Date",
     "date": "Date",
     "date_range": "Date Range",

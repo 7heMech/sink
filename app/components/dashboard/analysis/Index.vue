@@ -70,7 +70,10 @@ onBeforeMount(() => {
             {{ link.slug }} {{ $t('dashboard.stats') }}
           </h3>
         </template>
-        <DashboardDatePicker @update:date-range="changeDate" />
+        <div class="flex items-center gap-2">
+          <DashboardMetricsExportCSV />
+          <DashboardDatePicker @update:date-range="changeDate" />
+        </div>
       </DashboardNav>
       <DashboardFilters v-if="!link" @change="changeFilter" />
     </div>
