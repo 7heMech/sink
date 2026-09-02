@@ -26,8 +26,8 @@ description: 通过 Git 集成将 Sink 部署到 Cloudflare Workers。
 在 Cloudflare 仪表盘中创建带 **Git 集成** 的 Worker，并连接你的 Fork：
 
 - **生产分支：** `master`
-- **构建命令：** `pnpm build`
-- **部署命令：** `pnpm deploy:worker`
+- **构建命令：** `bun run build`
+- **部署命令：** `bun run deploy:worker`
 
 添加这些**构建变量**（**不要**把生产环境 ID 写进仓库里的 `wrangler.jsonc` — 请用 `DEPLOY_*`）：
 
@@ -41,7 +41,7 @@ description: 通过 Git 集成将 Sink 部署到 Cloudflare Workers。
 | `DEPLOY_D1_DATABASE_NAME`        | 可选；默认 `sink`                                                                 |
 | `DEPLOY_ANALYTICS_DATASET`       | 可选；默认 `sink`（若改了，请与 `NUXT_DATASET` 保持一致）                         |
 
-`pnpm deploy:worker` 会根据这些值生成被 gitignore 的 `wrangler.deploy.jsonc`，更新 D1 结构后部署。连接仓库时 Cloudflare 会生成部署令牌 — 不用再单独粘贴部署密钥。
+`bun run deploy:worker` 会根据这些值生成被 gitignore 的 `wrangler.deploy.jsonc`，更新 D1 结构后部署。连接仓库时 Cloudflare 会生成部署令牌 — 不用再单独粘贴部署密钥。
 
 ## 3. 应用设置（登录密码等）
 

@@ -26,8 +26,8 @@ Analytics is optional — short links still work without it. Setup: [Analytics a
 In the Cloudflare dashboard, create a Worker with **Git integration** and connect your fork:
 
 - **Production branch:** `master`
-- **Build command:** `pnpm build`
-- **Deploy command:** `pnpm deploy:worker`
+- **Build command:** `bun run build`
+- **Deploy command:** `bun run deploy:worker`
 
 Add these **build variables** (do **not** put production IDs into tracked `wrangler.jsonc` — set `DEPLOY_*` instead):
 
@@ -41,7 +41,7 @@ Add these **build variables** (do **not** put production IDs into tracked `wrang
 | `DEPLOY_D1_DATABASE_NAME`        | Optional; default `sink`                                                                   |
 | `DEPLOY_ANALYTICS_DATASET`       | Optional; default `sink` (keep in sync with `NUXT_DATASET` if you change it)               |
 
-`pnpm deploy:worker` generates gitignored `wrangler.deploy.jsonc` from these values, updates the D1 schema, then deploys. When you connect the repo, Cloudflare creates a deploy token — no extra credential to paste.
+`bun run deploy:worker` generates gitignored `wrangler.deploy.jsonc` from these values, updates the D1 schema, then deploys. When you connect the repo, Cloudflare creates a deploy token — no extra credential to paste.
 
 ## 3. App settings (login password and more)
 

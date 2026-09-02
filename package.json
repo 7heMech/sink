@@ -3,20 +3,36 @@
   "type": "module",
   "version": "0.3.0",
   "private": true,
-  "packageManager": "pnpm@11.11.0",
+  "packageManager": "bun@1.4.0",
   "engines": {
     "node": ">=22"
   },
+  "workspaces": [
+    "docs"
+  ],
+  "trustedDependencies": [
+    "@parcel/watcher",
+    "esbuild",
+    "maplibre-gl",
+    "sharp",
+    "simple-git-hooks",
+    "unrs-resolver",
+    "vue-demi",
+    "workerd"
+  ],
+  "overrides": {
+    "decode-uri-component": "0.2.2"
+  },
   "scripts": {
     "dev": "nuxt dev --port 7465",
-    "dev:docs": "pnpm --filter @sink/docs dev",
-    "build:docs": "pnpm --filter @sink/docs build",
-    "preview:docs": "pnpm --filter @sink/docs preview",
+    "dev:docs": "bun run --filter=@sink/docs dev",
+    "build:docs": "bun run --filter=@sink/docs build",
+    "preview:docs": "bun run --filter=@sink/docs preview",
     "analyze": "nuxt analyze",
     "test": "vitest",
-    "prebuild": "pnpm build:sphere",
+    "prebuild": "bun run build:sphere",
     "build": "NODE_OPTIONS=--max-old-space-size=8192 nuxt build",
-    "postbuild": "test \"$CF_PAGES:$CF_PAGES_BRANCH\" != \"1:master\" || pnpm db:migrate:remote",
+    "postbuild": "test \"$CF_PAGES:$CF_PAGES_BRANCH\" != \"1:master\" || bun run db:migrate:remote",
     "build:map": "node scripts/build-map.js",
     "build:sphere": "node scripts/build-sphere.js",
     "build:colo": "node scripts/build-colo.js",
@@ -31,12 +47,12 @@
     "deploy:config": "node scripts/cloudflare-deploy-config.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply sink --local",
-    "db:migrate:remote": "pnpm deploy:config && wrangler d1 migrations apply DB --remote --config wrangler.deploy.jsonc",
-    "deploy": "pnpm deploy:pages",
-    "deploy:pages": "pnpm db:migrate:remote && wrangler pages deploy dist",
-    "deploy:worker": "pnpm db:migrate:remote && wrangler deploy .output/server/index.mjs --assets .output/public --config wrangler.deploy.jsonc",
+    "db:migrate:remote": "bun run deploy:config && wrangler d1 migrations apply DB --remote --config wrangler.deploy.jsonc",
+    "deploy": "bun run deploy:pages",
+    "deploy:pages": "bun run db:migrate:remote && wrangler pages deploy dist",
+    "deploy:worker": "bun run db:migrate:remote && wrangler deploy .output/server/index.mjs --assets .output/public --config wrangler.deploy.jsonc",
     "preview": "wrangler dev .output/server/index.mjs --assets .output/public ",
-    "postinstall": "pnpm build:map && nuxt prepare",
+    "postinstall": "bun run build:map && nuxt prepare",
     "prepare": "simple-git-hooks"
   },
   "devDependencies": {
@@ -106,7 +122,7 @@
     "zod": "^4.4.3"
   },
   "simple-git-hooks": {
-    "pre-commit": "pnpm lint-staged"
+    "pre-commit": "bun run lint-staged"
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx,vue}": [

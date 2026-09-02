@@ -11,7 +11,7 @@ Create a [fork of the Sink repository](https://github.com/miantiao-me/Sink/fork)
 
 - **Production branch:** `master`
 - **Framework preset:** Nuxt
-- **Build command:** `pnpm build`
+- **Build command:** `bun run build`
 - **Build output directory:** `dist`
 
 Create the project so settings become available.
@@ -54,7 +54,7 @@ Also configure Pages Build / Wrangler authentication for the Production environm
 
 | Authentication variable   | Type             | What to put                                                                                                                                                                                                 |
 | ------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`    | Encrypted secret | Token used by the `postbuild` remote D1 migration. Git builds need at least **Account → D1 → Edit**. If the same token runs `pnpm deploy:pages` externally, also grant **Account → Cloudflare Pages → Edit** |
+| `CLOUDFLARE_API_TOKEN`    | Encrypted secret | Token used by the `postbuild` remote D1 migration. Git builds need at least **Account → D1 → Edit**. If the same token runs `bun run deploy:pages` externally, also grant **Account → Cloudflare Pages → Edit** |
 | `CLOUDFLARE_ACCOUNT_ID`   | Variable         | Cloudflare account ID. Wrangler defines it as optional, but this project does not set `account_id`, so configure it for stable non-interactive builds                                                       |
 
 `CLOUDFLARE_ACCOUNT_ID` may have the same value as `NUXT_CF_ACCOUNT_ID`, but both variable names must be set separately. Preview builds skip the migration, so these authentication variables are not needed in the Preview environment.
@@ -77,7 +77,7 @@ The repository's `postbuild` script runs the remote D1 migration only when Pages
 
 Start a deployment from `master` and wait until it finishes.
 
-For a manual CLI deployment, build first. `pnpm deploy:pages` assumes `dist` already exists: it generates `wrangler.deploy.jsonc` from the `DEPLOY_*` values, applies remote D1 migrations, and then uploads `dist` with Wrangler. It does not run the application build.
+For a manual CLI deployment, build first. `bun run deploy:pages` assumes `dist` already exists: it generates `wrangler.deploy.jsonc` from the `DEPLOY_*` values, applies remote D1 migrations, and then uploads `dist` with Wrangler. It does not run the application build.
 
 1. Open `/dashboard` and sign in with `NUXT_SITE_TOKEN`
 2. Open **Dashboard → Links** once (one-time storage setup)

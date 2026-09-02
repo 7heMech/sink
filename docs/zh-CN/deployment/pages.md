@@ -11,7 +11,7 @@ description: 通过 Git 集成和仪表盘管理的绑定将 Sink 部署到 Clou
 
 - **生产分支：** `master`
 - **框架预设：** Nuxt
-- **构建命令：** `pnpm build`
+- **构建命令：** `bun run build`
 - **构建输出目录：** `dist`
 
 先创建项目，才能进入设置。
@@ -54,7 +54,7 @@ description: 通过 Git 集成和仪表盘管理的绑定将 Sink 部署到 Clou
 
 | 鉴权变量                  | 类型     | 填什么                                                                                                                                                                                    |
 | ------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`    | 加密密钥 | `postbuild` 远程 D1 迁移使用的令牌。Git 构建最低需要 **Account → D1 → Edit**；若在外部使用同一令牌执行 `pnpm deploy:pages`，还需 **Account → Cloudflare Pages → Edit**                     |
+| `CLOUDFLARE_API_TOKEN`    | 加密密钥 | `postbuild` 远程 D1 迁移使用的令牌。Git 构建最低需要 **Account → D1 → Edit**；若在外部使用同一令牌执行 `bun run deploy:pages`，还需 **Account → Cloudflare Pages → Edit**                     |
 | `CLOUDFLARE_ACCOUNT_ID`   | 变量     | Cloudflare 账户 ID。Wrangler 官方将其定义为可选，但本项目未配置 `account_id`，因此建议设置，以保证非交互构建稳定                                                                           |
 
 `CLOUDFLARE_ACCOUNT_ID` 可以与 `NUXT_CF_ACCOUNT_ID` 使用相同的值，但两个变量名必须分别设置。预览构建会跳过迁移，因此 Preview 环境不需要这两个鉴权变量。
@@ -77,7 +77,7 @@ Pages 会把仪表盘中的这套变量同时提供给构建和运行环境，�
 
 从 `master` 启动部署并等待完成。
 
-如需通过 CLI 手动部署，请先完成构建。`pnpm deploy:pages` 假定 `dist` 已存在：它先根据 `DEPLOY_*` 值生成 `wrangler.deploy.jsonc` 并执行远程 D1 迁移，再通过 Wrangler 上传 `dist`；该命令不会执行应用构建。
+如需通过 CLI 手动部署，请先完成构建。`bun run deploy:pages` 假定 `dist` 已存在：它先根据 `DEPLOY_*` 值生成 `wrangler.deploy.jsonc` 并执行远程 D1 迁移，再通过 Wrangler 上传 `dist`；该命令不会执行应用构建。
 
 1. 打开 `/dashboard`，用 `NUXT_SITE_TOKEN` 登录
 2. 打开一次 **Dashboard → Links**（一次性存储初始化）
