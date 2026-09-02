@@ -47,10 +47,10 @@
     "deploy:config": "node scripts/cloudflare-deploy-config.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply sink --local",
-    "db:migrate:remote": "bun run deploy:config && wrangler d1 migrations apply DB --remote --config wrangler.deploy.jsonc",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "deploy": "bun run deploy:pages",
     "deploy:pages": "bun run db:migrate:remote && wrangler pages deploy dist",
-    "deploy:worker": "bun run db:migrate:remote && wrangler deploy .output/server/index.mjs --assets .output/public --config wrangler.deploy.jsonc",
+    "deploy:worker": "bun run db:migrate:remote && wrangler deploy .output/server/index.mjs --assets .output/public",
     "preview": "wrangler dev .output/server/index.mjs --assets .output/public ",
     "postinstall": "bun run build:map && nuxt prepare",
     "prepare": "simple-git-hooks"
