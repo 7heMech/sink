@@ -32,7 +32,7 @@
     "test": "vitest",
     "prebuild": "bun run build:sphere",
     "build": "NODE_OPTIONS=--max-old-space-size=8192 nuxt build",
-    "postbuild": "test \"$CF_PAGES:$CF_PAGES_BRANCH\" != \"1:master\" || bun run db:migrate:remote",
+    "postbuild": "if [ \"$CF_PAGES:$CF_PAGES_BRANCH\" = \"1:master\" ] || [ -n \"$WORKERS_CI\" ]; then bun run db:migrate:remote; fi",
     "build:map": "node scripts/build-map.js",
     "build:sphere": "node scripts/build-sphere.js",
     "build:colo": "node scripts/build-colo.js",
