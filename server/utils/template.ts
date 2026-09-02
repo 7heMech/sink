@@ -2,6 +2,17 @@ import type { Link } from '#shared/schemas/link'
 import { escape } from 'es-toolkit/string'
 import { parseURL } from 'ufo'
 
+const CLOAKING_IFRAME_SANDBOX = [
+  'allow-scripts',
+  'allow-same-origin',
+  'allow-forms',
+  'allow-popups',
+  'allow-popups-to-escape-sandbox',
+  'allow-top-navigation-by-user-activation',
+  'allow-downloads',
+  'allow-modals',
+].join(' ')
+
 function buildMetaTags(link: Link, baseUrl: string) {
   const { host: hostname } = parseURL(link.url)
   const title = link.title || hostname || 'Link'
@@ -30,18 +41,6 @@ function buildMetaTags(link: Link, baseUrl: string) {
 export function generateCloakingHtml(link: Link, targetUrl: string, baseUrl: string): string {
   const { title, tags } = buildMetaTags(link, baseUrl)
 
-  const sandboxFlags = [
-    'allow-scripts',
-    'allow-same-origin',
-    'allow-forms',
-    'allow-popups',
-    'allow-popups-to-escape-sandbox',
-  ]
-  if (link.cloakingAllowTopNavigation) {
-    sandboxFlags.push('allow-top-navigation-by-user-activation')
-  }
-  const sandbox = sandboxFlags.join(' ')
-
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -51,7 +50,7 @@ export function generateCloakingHtml(link: Link, targetUrl: string, baseUrl: str
     ${tags}
 </head>
 <body style="margin:0;overflow:hidden">
-    <iframe src="${escape(targetUrl)}" style="width:100vw;height:100vh;border:none" sandbox="${sandbox}" allowfullscreen referrerpolicy="no-referrer"></iframe>
+    <iframe src="${escape(targetUrl)}" style="width:100%;height:100%;width:100vw;height:100vh;border:none" sandbox="${CLOAKING_IFRAME_SANDBOX}" allowfullscreen referrerpolicy="no-referrer"></iframe>
     <noscript><meta http-equiv="refresh" content="0;url=${escape(targetUrl)}"></noscript>
 </body>
 </html>`
@@ -63,10 +62,10 @@ interface PasswordHtmlOptions {
 }
 
 export function generatePasswordHtml(slug: string, options: PasswordHtmlOptions = {}): string {
-  const { hasError = false, locale = 'en' } = options
+  const { hasError = false, locale = 'en-US' } = options
   const t = REDIRECT_TRANSLATIONS[locale]
   return `<!DOCTYPE html>
-<html>
+<html lang="${escape(locale)}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -105,10 +104,10 @@ interface UnsafeWarningHtmlOptions {
 }
 
 export function generateUnsafeWarningHtml(slug: string, targetUrl: string, options: UnsafeWarningHtmlOptions = {}): string {
-  const { password, locale = 'en' } = options
+  const { password, locale = 'en-US' } = options
   const t = REDIRECT_TRANSLATIONS[locale]
   return `<!DOCTYPE html>
-<html>
+<html lang="${escape(locale)}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
