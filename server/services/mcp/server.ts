@@ -1,7 +1,6 @@
 import type { H3Event } from 'h3'
 import type { JsonRpcId, JsonRpcRequest, McpResponse } from './protocol'
-import type { McpToolResult } from './tools'
-import { getHeader, getRequestHost, readRawBody } from 'h3'
+import { createError, getHeader, getRequestHost, readRawBody, setResponseHeader } from 'h3'
 import {
   isJsonRpcRequest,
   jsonRpcError,
@@ -44,18 +43,13 @@ const CACHE_HINTS = {
   cacheScope: 'public',
 } as const
 
-function resultMeta() {
-  return { [META_SERVER_INFO]: MCP_SERVER_INFO }
+function isLegacyVersion(version: string | undefined): boolean {
+  return LEGACY_PROTOCOL_VERSIONS.includes(version as typeof LEGACY_PROTOCOL_VERSIONS[number])
 }
 
-function listedTools() {
-  return mcpTools.map(({ name, title, description, inputSchema, annotations }) => ({
-    name,
-    title,
-    description,
-    inputSchema,
-    annotations,
-  }))
+/** Older clients negotiate at initialize; an unknown request falls back to the newest legacy revision. */
+function negotiateLegacyVersion(requested: unknown): string {
+  return typeof requested === 'string' && isLegacyVersion(requested) ? requested : LEGACY_PROTOCOL_VERSIONS[0]
 }
 
 function methodNotFound(id: JsonRpcId | undefined, method: string): McpResponse {
@@ -65,118 +59,86 @@ function methodNotFound(id: JsonRpcId | undefined, method: string): McpResponse 
   }, 404)
 }
 
-type ToolCallOutcome = { error: McpResponse } | { result: McpToolResult }
+function invalidParams(id: JsonRpcId | undefined, message: string): McpResponse {
+  return jsonRpcError(id, { code: JsonRpcErrorCode.InvalidParams, message }, 400)
+}
 
-async function runToolCall(event: H3Event, request: JsonRpcRequest): Promise<ToolCallOutcome> {
-  const name = request.params?.name
-  if (typeof name !== 'string') {
-    return {
-      error: jsonRpcError(request.id, {
-        code: JsonRpcErrorCode.InvalidParams,
-        message: 'params.name is required',
-      }, 400),
-    }
-  }
-
-  const tool = mcpToolsByName.get(name)
-  if (!tool) {
-    return {
-      error: jsonRpcError(request.id, {
-        code: JsonRpcErrorCode.InvalidParams,
-        message: `Unknown tool: ${name}`,
-      }, 400),
-    }
-  }
-
-  const args = request.params?.arguments
-  const result = await callMcpTool(event, tool, args && typeof args === 'object' && !Array.isArray(args)
-    ? args as Record<string, unknown>
-    : {})
-
-  return { result }
+/** Tool arguments are an object or nothing; anything else is treated as no arguments. */
+function toolArguments(params: JsonRpcRequest['params']): Record<string, unknown> {
+  const args = params?.arguments
+  return args && typeof args === 'object' && !Array.isArray(args) ? args as Record<string, unknown> : {}
 }
 
 /**
- * Dispatch for the stateless revision: every request carries its own protocol
+ * Single dispatch for both protocol eras. The stateless revision wraps every
+ * result in `resultType` and server `_meta`, and every request carries its own
  * version, identity, and capabilities, so nothing is remembered between calls.
+ * Initialization-based revisions answer the handshake without minting a
+ * session, which those revisions permit, keeping the endpoint stateless.
  */
-async function dispatchModern(event: H3Event, request: JsonRpcRequest): Promise<McpResponse> {
+async function dispatch(event: H3Event, request: JsonRpcRequest, stateless: boolean): Promise<McpResponse> {
   const id = request.id as JsonRpcId
+  const complete = (result: Record<string, unknown> = {}) => jsonRpcResult(id, stateless
+    ? { resultType: 'complete', ...result, _meta: { [META_SERVER_INFO]: MCP_SERVER_INFO } }
+    : result)
+
+  // Only the stateless revision defines caching hints on its cacheable results.
+  const cacheHints = stateless ? CACHE_HINTS : {}
 
   switch (request.method) {
-    case 'server/discover':
+    case 'initialize':
       return jsonRpcResult(id, {
-        resultType: 'complete',
-        supportedVersions: SUPPORTED_PROTOCOL_VERSIONS,
-        capabilities: SERVER_CAPABILITIES,
-        instructions: INSTRUCTIONS,
-        ...CACHE_HINTS,
-        _meta: resultMeta(),
-      })
-
-    case 'tools/list':
-      return jsonRpcResult(id, {
-        resultType: 'complete',
-        tools: listedTools(),
-        ...CACHE_HINTS,
-        _meta: resultMeta(),
-      })
-
-    case 'tools/call': {
-      const outcome = await runToolCall(event, request)
-      if ('error' in outcome)
-        return outcome.error
-
-      return jsonRpcResult(id, {
-        resultType: 'complete',
-        ...outcome.result,
-        _meta: resultMeta(),
-      })
-    }
-
-    // `ping` was removed in this revision, so it falls through to 404.
-    default:
-      return methodNotFound(id, request.method)
-  }
-}
-
-/**
- * Dispatch for initialization-based revisions. The handshake is answered
- * without minting a session, which those revisions permit, so the endpoint
- * stays stateless for every client era.
- */
-async function dispatchLegacy(event: H3Event, request: JsonRpcRequest): Promise<McpResponse> {
-  const id = request.id as JsonRpcId
-
-  switch (request.method) {
-    case 'initialize': {
-      const requested = request.params?.protocolVersion
-      const negotiated = typeof requested === 'string' && LEGACY_PROTOCOL_VERSIONS.includes(requested as typeof LEGACY_PROTOCOL_VERSIONS[number])
-        ? requested
-        : LEGACY_PROTOCOL_VERSIONS[0]
-
-      return jsonRpcResult(id, {
-        protocolVersion: negotiated,
+        protocolVersion: negotiateLegacyVersion(request.params?.protocolVersion),
         capabilities: SERVER_CAPABILITIES,
         serverInfo: MCP_SERVER_INFO,
         instructions: INSTRUCTIONS,
       })
-    }
+
+    case 'server/discover':
+      return stateless
+        ? complete({
+            supportedVersions: SUPPORTED_PROTOCOL_VERSIONS,
+            capabilities: SERVER_CAPABILITIES,
+            instructions: INSTRUCTIONS,
+            ...cacheHints,
+          })
+        : methodNotFound(id, request.method)
 
     case 'tools/list':
-      return jsonRpcResult(id, { tools: listedTools() })
+      return complete({ tools: mcpTools.map(({ handler, ...tool }) => tool), ...cacheHints })
 
     case 'tools/call': {
-      const outcome = await runToolCall(event, request)
-      return 'error' in outcome ? outcome.error : jsonRpcResult(id, { ...outcome.result })
+      const name = request.params?.name
+      if (typeof name !== 'string')
+        return invalidParams(id, 'params.name is required')
+
+      const tool = mcpToolsByName.get(name)
+      if (!tool)
+        return invalidParams(id, `Unknown tool: ${name}`)
+
+      return complete({ ...await callMcpTool(event, tool, toolArguments(request.params)) })
     }
 
+    // `ping` went away with the session it kept alive, so the stateless
+    // revision answers the 404 the transport mandates for unknown methods.
     case 'ping':
-      return jsonRpcResult(id, {})
+      return stateless ? methodNotFound(id, request.method) : complete()
 
     default:
       return methodNotFound(id, request.method)
   }
+}
+
+/**
+ * The 2026-07-28 revision removed the standalone GET stream and protocol-level
+ * sessions, so POST is the only method this endpoint answers.
+ */
+export function rejectNonPostMethod(event: H3Event): never {
+  setResponseHeader(event, 'Allow', 'POST')
+  throw createError({
+    status: 405,
+    statusText: 'Method Not Allowed',
+  })
 }
 
 /**
@@ -243,13 +205,11 @@ export async function handleMcpPost(event: H3Event): Promise<McpResponse> {
         }, 400)
   }
 
-  if (declaredVersion === MCP_PROTOCOL_VERSION) {
-    const invalid = validateRequestHeaders(event, request)
-    return invalid ?? await dispatchModern(event, request)
-  }
+  if (declaredVersion === MCP_PROTOCOL_VERSION)
+    return validateRequestHeaders(event, request) ?? await dispatch(event, request, true)
 
-  if (request.method === 'initialize' || declaredVersion === undefined || LEGACY_PROTOCOL_VERSIONS.includes(declaredVersion as typeof LEGACY_PROTOCOL_VERSIONS[number]))
-    return await dispatchLegacy(event, request)
+  if (request.method === 'initialize' || declaredVersion === undefined || isLegacyVersion(declaredVersion))
+    return await dispatch(event, request, false)
 
   return unsupportedProtocolVersion(request.id, declaredVersion)
 }

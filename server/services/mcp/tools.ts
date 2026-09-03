@@ -6,6 +6,7 @@ import {
   CreateLinkSchema,
   DeleteLinkSchema,
   EditLinkSchema,
+  LinkFieldsSchema,
   LinkFilterQuerySchema,
   LinkSlugQuerySchema,
   ListLinksQuerySchema,
@@ -17,7 +18,6 @@ import {
   buildMetricsQuery,
   buildViewsQuery,
   MetricsQuerySchema,
-  metricTypes,
   ViewsQuerySchema,
 } from '../../utils/analytics-queries'
 import { useWAE } from '../../utils/cloudflare'
@@ -53,110 +53,41 @@ export interface McpToolAnnotations {
   openWorldHint?: boolean
 }
 
-export interface McpTool {
+interface McpToolDefinition {
   name: string
-  title: string
   description: string
   inputSchema: Record<string, unknown>
   annotations: McpToolAnnotations
   handler: (event: H3Event, args: Record<string, unknown>) => Promise<unknown>
 }
 
-const statusProperty = {
-  type: 'string',
-  enum: ['active', 'expired', 'all'],
-  default: 'active',
-  description: 'Expiration status filter.',
-} as const
-
-const tagProperty = {
-  type: 'string',
-  description: 'Exact tag filter, normalized to lowercase.',
-} as const
-
-const linkFilterProperties = {
-  q: {
-    type: 'string',
-    description: 'Case-insensitive substring matched against slug, URL, comment, or tag. Limited to 48 UTF-8 bytes.',
-  },
-  url: {
-    type: 'string',
-    description: 'Target URL matched exactly.',
-  },
-  tag: tagProperty,
-  status: statusProperty,
-} as const
-
-/** Writable link fields, mirroring the create and edit REST contracts. */
-const linkWriteProperties = {
-  url: { type: 'string', description: 'The target URL.' },
-  slug: { type: 'string', description: 'The short link slug.' },
-  comment: { type: 'string', description: 'Optional internal comment.' },
-  expiration: { type: 'integer', description: 'Expiration timestamp in unix seconds. Must be in the future.' },
-  title: { type: 'string', description: 'Custom title for the link preview.' },
-  description: { type: 'string', description: 'Custom description for the link preview.' },
-  image: { type: 'string', description: 'Custom image for the link preview.' },
-  apple: { type: 'string', description: 'Apple App Store redirect URL.' },
-  google: { type: 'string', description: 'Google Play Store redirect URL.' },
-  cloaking: { type: 'boolean', description: 'Mask the destination URL behind the short link.' },
-  redirectWithQuery: { type: 'boolean', description: 'Append incoming query parameters to the destination URL.' },
-  password: { type: 'string', description: 'Password protecting the link.' },
-  unsafe: { type: 'boolean', description: 'Show a warning page before redirecting.' },
-  geo: {
-    type: 'object',
-    additionalProperties: { type: 'string' },
-    description: 'Geo-routing rules mapping a two-letter country code to a URL.',
-  },
-  tags: {
-    type: 'array',
-    items: { type: 'string' },
-    maxItems: 10,
-    description: 'Up to 10 tags, each 1-32 characters.',
-  },
-} as const
-
-/** Analytics dimensions shared by every stats tool, matching QuerySchema. */
-const analyticsFilterProperties = {
-  id: { type: 'string', description: 'Comma-separated link ids to filter on.' },
-  slug: { type: 'string', description: 'Comma-separated slugs to filter on.' },
-  url: { type: 'string', description: 'Comma-separated destination URLs to filter on.' },
-  startAt: { type: 'integer', description: 'Start of the window, unix seconds.' },
-  endAt: { type: 'integer', description: 'End of the window, unix seconds.' },
-  referer: { type: 'string', description: 'Comma-separated referers to filter on.' },
-  country: { type: 'string', description: 'Comma-separated country codes to filter on.' },
-  region: { type: 'string', description: 'Comma-separated regions to filter on.' },
-  city: { type: 'string', description: 'Comma-separated cities to filter on.' },
-  timezone: { type: 'string', description: 'Comma-separated visitor timezones to filter on.' },
-  language: { type: 'string', description: 'Comma-separated visitor languages to filter on.' },
-  os: { type: 'string', description: 'Comma-separated operating systems to filter on.' },
-  browser: { type: 'string', description: 'Comma-separated browsers to filter on.' },
-  browserType: { type: 'string', description: 'Comma-separated browser types to filter on.' },
-  device: { type: 'string', description: 'Comma-separated devices to filter on.' },
-  deviceType: { type: 'string', description: 'Comma-separated device types to filter on.' },
-} as const
-
-function objectSchema(properties: Record<string, unknown>, required?: string[]) {
-  return {
-    type: 'object',
-    properties,
-    ...(required?.length ? { required } : {}),
-    additionalProperties: false,
-  }
+export interface McpTool extends McpToolDefinition {
+  title: string
 }
 
-export const mcpTools: McpTool[] = [
+/**
+ * Tool input schemas are generated from the same zod contracts the handlers
+ * parse with, so the advertised shape cannot drift from what is accepted.
+ */
+function inputSchema(schema: z.ZodType): Record<string, unknown> {
+  const { $schema, ...json } = z.toJSONSchema(schema, { io: 'input', unrepresentable: 'any' })
+  return { ...json, additionalProperties: false }
+}
+
+/** Create and upsert generate a slug when one is omitted; the other write fields match the edit contract. */
+const CreateLinkArgsSchema = LinkFieldsSchema.partial({ slug: true })
+
+/** Analytics filters, minus the row limit the counter and time-series tools ignore. */
+const AnalyticsFilterSchema = QuerySchema.omit({ limit: true })
+
+const FILTER_NOTE = 'Every filter accepts a comma-separated list of values.'
+
+const toolDefinitions: McpToolDefinition[] = [
   {
     name: 'list_links',
-    title: 'List links',
     description: 'List short links newest first, with cursor pagination. Use search_links when looking for a specific link.',
-    inputSchema: objectSchema({
-      limit: { type: 'integer', minimum: 1, maximum: 1000, default: 20, description: 'Maximum number of links to return.' },
-      cursor: { type: 'string', description: 'Pagination cursor returned by a previous call.' },
-      sort: { type: 'string', enum: ['az', 'za', 'newest', 'oldest'], default: 'newest', description: 'Sort order.' },
-      tag: tagProperty,
-      status: statusProperty,
-    }),
-    annotations: { readOnlyHint: true, openWorldHint: false },
+    inputSchema: inputSchema(ListLinksQuerySchema),
+    annotations: { readOnlyHint: true },
     async handler(event, args) {
       await assertLinkStoreReady(event)
       const query = ListLinksQuerySchema.parse(args)
@@ -167,13 +98,9 @@ export const mcpTools: McpTool[] = [
   },
   {
     name: 'search_links',
-    title: 'Search links',
     description: 'Search links by keyword or exact destination URL. One of `q` or `url` is required; without either the result is empty.',
-    inputSchema: objectSchema({
-      ...linkFilterProperties,
-      limit: { type: 'integer', minimum: 1, maximum: 1000, default: 20, description: 'Maximum number of matches to return.' },
-    }),
-    annotations: { readOnlyHint: true, openWorldHint: false },
+    inputSchema: inputSchema(SearchLinksQuerySchema),
+    annotations: { readOnlyHint: true },
     async handler(event, args) {
       await assertLinkStoreReady(event)
       const query = SearchLinksQuerySchema.parse(args)
@@ -186,12 +113,9 @@ export const mcpTools: McpTool[] = [
   },
   {
     name: 'get_link',
-    title: 'Get link',
     description: 'Read a single short link by slug, including its stored metadata.',
-    inputSchema: objectSchema({
-      slug: { type: 'string', description: 'The slug of the link to read.' },
-    }, ['slug']),
-    annotations: { readOnlyHint: true, openWorldHint: false },
+    inputSchema: inputSchema(LinkSlugQuerySchema),
+    annotations: { readOnlyHint: true },
     async handler(event, args) {
       await assertLinkStoreReady(event)
       const { slug } = LinkSlugQuerySchema.parse(args)
@@ -204,10 +128,9 @@ export const mcpTools: McpTool[] = [
   },
   {
     name: 'count_links',
-    title: 'Count links',
     description: 'Count links matching an optional keyword, URL, tag, or expiration status.',
-    inputSchema: objectSchema(linkFilterProperties),
-    annotations: { readOnlyHint: true, openWorldHint: false },
+    inputSchema: inputSchema(LinkFilterQuerySchema),
+    annotations: { readOnlyHint: true },
     async handler(event, args) {
       await assertLinkStoreReady(event)
       const query = LinkFilterQuerySchema.parse(args)
@@ -217,10 +140,9 @@ export const mcpTools: McpTool[] = [
   },
   {
     name: 'list_tags',
-    title: 'List tags',
     description: 'List every tag currently in use, with the number of links carrying it.',
-    inputSchema: objectSchema({}),
-    annotations: { readOnlyHint: true, openWorldHint: false },
+    inputSchema: inputSchema(z.object({})),
+    annotations: { readOnlyHint: true },
     async handler(event) {
       await assertLinkStoreReady(event)
       return { tags: await listTags(event) }
@@ -228,10 +150,9 @@ export const mcpTools: McpTool[] = [
   },
   {
     name: 'create_link',
-    title: 'Create link',
     description: 'Create a short link. Fails when the slug is already taken; use upsert_link to reuse an existing link instead.',
-    inputSchema: objectSchema(linkWriteProperties, ['url']),
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    inputSchema: inputSchema(CreateLinkArgsSchema),
+    annotations: { destructiveHint: false },
     async handler(event, args) {
       await assertLinkStoreReady(event)
       const link = CreateLinkSchema.parse(args)
@@ -247,10 +168,9 @@ export const mcpTools: McpTool[] = [
   },
   {
     name: 'update_link',
-    title: 'Update link',
     description: 'Replace an existing link identified by slug. Every writable field is overwritten and any omitted optional field is cleared, so read the link with get_link first and send it back complete.',
-    inputSchema: objectSchema(linkWriteProperties, ['url', 'slug']),
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    inputSchema: inputSchema(LinkFieldsSchema),
+    annotations: { destructiveHint: true, idempotentHint: true },
     async handler(event, args) {
       assertLinkWritesAllowed(event, 'edit')
       await assertLinkStoreReady(event)
@@ -276,10 +196,9 @@ export const mcpTools: McpTool[] = [
   },
   {
     name: 'upsert_link',
-    title: 'Upsert link',
     description: 'Return the existing link for a slug, or create it when absent. The result reports whether it was `created` or `existing`.',
-    inputSchema: objectSchema(linkWriteProperties, ['url']),
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    inputSchema: inputSchema(CreateLinkArgsSchema),
+    annotations: { destructiveHint: false, idempotentHint: true },
     async handler(event, args) {
       await assertLinkStoreReady(event)
       const link = CreateLinkSchema.parse(args)
@@ -305,12 +224,9 @@ export const mcpTools: McpTool[] = [
   },
   {
     name: 'delete_link',
-    title: 'Delete link',
     description: 'Permanently delete a short link. Existing traffic to the slug stops resolving immediately.',
-    inputSchema: objectSchema({
-      slug: { type: 'string', description: 'The slug of the link to delete.' },
-    }, ['slug']),
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    inputSchema: inputSchema(DeleteLinkSchema),
+    annotations: { destructiveHint: true, idempotentHint: true },
     async handler(event, args) {
       assertLinkWritesAllowed(event, 'delete')
       await assertLinkStoreReady(event)
@@ -323,10 +239,9 @@ export const mcpTools: McpTool[] = [
   },
   {
     name: 'get_analytics_counters',
-    title: 'Get analytics counters',
-    description: 'Total visits, unique visitors, and referer counts over the access log, optionally filtered by link and visitor dimensions.',
-    inputSchema: objectSchema(analyticsFilterProperties),
-    annotations: { readOnlyHint: true, openWorldHint: false },
+    description: `Total visits, unique visitors, and referer counts over the access log. ${FILTER_NOTE}`,
+    inputSchema: inputSchema(AnalyticsFilterSchema),
+    annotations: { readOnlyHint: true },
     async handler(event, args) {
       const query = QuerySchema.parse(args)
       return await useWAE(event, buildCountersQuery(query, event))
@@ -334,14 +249,9 @@ export const mcpTools: McpTool[] = [
   },
   {
     name: 'get_analytics_views',
-    title: 'Get analytics views',
-    description: 'Visits and visitors bucketed over time. Use `unit` to pick the bucket size and `clientTimezone` to bucket in a specific timezone.',
-    inputSchema: objectSchema({
-      ...analyticsFilterProperties,
-      unit: { type: 'string', enum: ['minute', 'hour', 'day'], description: 'Time bucket size.' },
-      clientTimezone: { type: 'string', default: 'Etc/UTC', description: 'IANA timezone used to bucket timestamps.' },
-    }, ['unit']),
-    annotations: { readOnlyHint: true, openWorldHint: false },
+    description: `Visits and visitors bucketed over time by minute, hour, or day. ${FILTER_NOTE}`,
+    inputSchema: inputSchema(ViewsQuerySchema.omit({ limit: true })),
+    annotations: { readOnlyHint: true },
     async handler(event, args) {
       const query = ViewsQuerySchema.parse(args)
       return await useWAE(event, buildViewsQuery(query, event))
@@ -349,20 +259,25 @@ export const mcpTools: McpTool[] = [
   },
   {
     name: 'get_analytics_metrics',
-    title: 'Get analytics metrics',
-    description: `Top values for one access-log dimension, ordered by visits. Valid \`type\` values: ${metricTypes.join(', ')}.`,
-    inputSchema: objectSchema({
-      ...analyticsFilterProperties,
-      type: { type: 'string', enum: [...metricTypes], description: 'The dimension to group by.' },
-      limit: { type: 'integer', minimum: 1, description: 'Maximum number of rows to return.' },
-    }, ['type']),
-    annotations: { readOnlyHint: true, openWorldHint: false },
+    description: `Top values for one access-log dimension, ordered by visits. ${FILTER_NOTE}`,
+    inputSchema: inputSchema(MetricsQuerySchema),
+    annotations: { readOnlyHint: true },
     async handler(event, args) {
       const query = MetricsQuerySchema.parse(args)
       return await useWAE(event, buildMetricsQuery(query, event))
     },
   },
 ]
+
+/**
+ * Titles are the display form of the name (`list_links` becomes `List links`),
+ * and annotations fall back to the hints every Sink tool shares.
+ */
+export const mcpTools: McpTool[] = toolDefinitions.map(tool => ({
+  ...tool,
+  title: tool.name.replace(/_/g, ' ').replace(/^./, character => character.toUpperCase()),
+  annotations: { readOnlyHint: false, openWorldHint: false, ...tool.annotations },
+}))
 
 export const mcpToolsByName = new Map(mcpTools.map(tool => [tool.name, tool]))
 

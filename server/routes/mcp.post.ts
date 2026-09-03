@@ -12,12 +12,8 @@ defineRouteMeta({
           schema: {
             type: 'object',
             required: ['jsonrpc', 'method'],
-            properties: {
-              jsonrpc: { type: 'string', enum: ['2.0'] },
-              id: { type: ['string', 'integer'], description: 'Request id. Omitted for notifications, which are answered with 202.' },
-              method: { type: 'string', description: 'One of server/discover, tools/list, or tools/call. Older clients may also send initialize and ping.' },
-              params: { type: 'object', additionalProperties: true },
-            },
+            additionalProperties: true,
+            description: 'A JSON-RPC 2.0 message. `method` is one of server/discover, tools/list, or tools/call; older clients may also send initialize and ping. A message without an `id` is a notification and is answered with 202.',
           },
         },
       },

@@ -15,16 +15,11 @@ export const LEGACY_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26
 
 export const SUPPORTED_PROTOCOL_VERSIONS = [MCP_PROTOCOL_VERSION, ...LEGACY_PROTOCOL_VERSIONS]
 
-/**
- * Version of this MCP endpoint implementation, reported as `serverInfo.version`.
- * It is independent of the Sink release version.
- */
-export const MCP_SERVER_VERSION = '1.0.0'
-
+/** Reported as `serverInfo`. The version is this endpoint's, independent of the Sink release. */
 export const MCP_SERVER_INFO = {
   name: 'sink',
   title: 'Sink',
-  version: MCP_SERVER_VERSION,
+  version: '1.0.0',
 } as const
 
 export const META_PROTOCOL_VERSION = 'io.modelcontextprotocol/protocolVersion'
@@ -52,12 +47,6 @@ export interface JsonRpcRequest {
   id?: JsonRpcId
   method: string
   params?: Record<string, unknown>
-}
-
-export interface JsonRpcErrorBody {
-  code: number
-  message: string
-  data?: unknown
 }
 
 export interface McpResponse {
@@ -110,7 +99,7 @@ export function jsonRpcResult(id: JsonRpcId, result: Record<string, unknown>, st
   }
 }
 
-export function jsonRpcError(id: JsonRpcId | undefined, error: JsonRpcErrorBody, status: number): McpResponse {
+export function jsonRpcError(id: JsonRpcId | undefined, error: { code: number, message: string, data?: unknown }, status: number): McpResponse {
   return {
     status,
     body: {
@@ -152,50 +141,40 @@ export function readDeclaredProtocolVersion(event: H3Event, request: JsonRpcRequ
   return getHeader(event, 'mcp-protocol-version') || undefined
 }
 
+/** The `_meta` entries the stateless revision requires on every request. */
+function requiredMeta(id: JsonRpcId | undefined, key: string): McpResponse {
+  return jsonRpcError(id, {
+    code: JsonRpcErrorCode.InvalidParams,
+    message: `params._meta['${key}'] is required`,
+  }, 400)
+}
+
+/** A mirrored header has to be present and to agree with the body value it mirrors. */
+function matchHeader(event: H3Event, id: JsonRpcId | undefined, header: string, expected: unknown): McpResponse | null {
+  const value = getHeader(event, header.toLowerCase())
+  if (!value)
+    return headerMismatch(id, `the ${header} header is required`)
+
+  return decodeHeaderValue(value) === expected
+    ? null
+    : headerMismatch(id, `${header} header value '${value}' does not match body value '${String(expected)}'`)
+}
+
 /**
  * Validates the headers the Streamable HTTP transport mirrors from the body.
  * The body stays the source of truth, so any disagreement is rejected.
  */
 export function validateRequestHeaders(event: H3Event, request: JsonRpcRequest): McpResponse | null {
   const id = request.id
-
-  const headerVersion = getHeader(event, 'mcp-protocol-version')
-  if (!headerVersion)
-    return headerMismatch(id, 'the MCP-Protocol-Version header is required')
-
   const meta = request.params?._meta as Record<string, unknown> | undefined
+
   const metaVersion = meta?.[META_PROTOCOL_VERSION]
-  if (typeof metaVersion !== 'string') {
-    return jsonRpcError(id, {
-      code: JsonRpcErrorCode.InvalidParams,
-      message: `params._meta['${META_PROTOCOL_VERSION}'] is required`,
-    }, 400)
-  }
-  if (metaVersion !== headerVersion)
-    return headerMismatch(id, `MCP-Protocol-Version header value '${headerVersion}' does not match body value '${metaVersion}'`)
+  if (typeof metaVersion !== 'string')
+    return requiredMeta(id, META_PROTOCOL_VERSION)
+  if (meta[META_CLIENT_CAPABILITIES] === undefined)
+    return requiredMeta(id, META_CLIENT_CAPABILITIES)
 
-  if (meta?.[META_CLIENT_CAPABILITIES] === undefined) {
-    return jsonRpcError(id, {
-      code: JsonRpcErrorCode.InvalidParams,
-      message: `params._meta['${META_CLIENT_CAPABILITIES}'] is required`,
-    }, 400)
-  }
-
-  const headerMethod = getHeader(event, 'mcp-method')
-  if (!headerMethod)
-    return headerMismatch(id, 'the Mcp-Method header is required')
-  if (headerMethod !== request.method)
-    return headerMismatch(id, `Mcp-Method header value '${headerMethod}' does not match body value '${request.method}'`)
-
-  if (request.method === 'tools/call') {
-    const headerName = getHeader(event, 'mcp-name')
-    if (!headerName)
-      return headerMismatch(id, 'the Mcp-Name header is required for tools/call')
-
-    const bodyName = request.params?.name
-    if (decodeHeaderValue(headerName) !== bodyName)
-      return headerMismatch(id, `Mcp-Name header value '${headerName}' does not match body value '${String(bodyName)}'`)
-  }
-
-  return null
+  return matchHeader(event, id, 'MCP-Protocol-Version', metaVersion)
+    ?? matchHeader(event, id, 'Mcp-Method', request.method)
+    ?? (request.method === 'tools/call' ? matchHeader(event, id, 'Mcp-Name', request.params?.name) : null)
 }

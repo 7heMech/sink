@@ -14,22 +14,21 @@ type MetricType = BlobsMap[keyof BlobsMap] | DoublesMap[keyof DoublesMap]
 
 const validMetricTypes = [...Object.values(blobsMap), ...Object.values(doublesMap)] as [MetricType, ...MetricType[]]
 
-export const metricTypes = validMetricTypes as readonly MetricType[]
-
 const viewUnits = { minute: '%Y-%m-%d %H:%i', hour: '%Y-%m-%d %H', day: '%Y-%m-%d' } as const
 
 const ClientTimezoneSchema = z.string()
   .regex(/^[\w+-]+(?:\/[\w+-]+)*$/)
   .max(64)
   .default('Etc/UTC')
+  .describe('IANA timezone used to bucket timestamps.')
 
 export const ViewsQuerySchema = QuerySchema.extend({
-  unit: z.enum(['minute', 'hour', 'day']),
+  unit: z.enum(['minute', 'hour', 'day']).describe('Time bucket size.'),
   clientTimezone: ClientTimezoneSchema,
 })
 
 export const MetricsQuerySchema = QuerySchema.extend({
-  type: z.enum(validMetricTypes),
+  type: z.enum(validMetricTypes).describe('The access-log dimension to group by.'),
 })
 
 export const HeatmapQuerySchema = QuerySchema.extend({
@@ -147,15 +146,10 @@ export function buildEventsQuery(query: Query, event: H3Event) {
 }
 
 export function buildLocationsQuery(query: Query, event: H3Event) {
-  const filter = buildAnalyticsFilter(query)
-  const { dataset } = useRuntimeConfig(event)
-  const analyticsQuery = createAnalyticsQuery(dataset)
+  // Use SUM(_sample_interval) instead of count() to account for sampling
+  return filteredQuery(query, event)
     .where('double1', '!=', sql.lit(0))
     .where('double2', '!=', sql.lit(0))
-  const withFilter = filter ? analyticsQuery.where(filter) : analyticsQuery
-
-  // Use SUM(_sample_interval) instead of count() to account for sampling
-  return withFilter
     .select([
       sql.ref('blob8').as(blobsMap.blob8),
       sql.ref('double1').as(doublesMap.double1),

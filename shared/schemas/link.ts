@@ -42,22 +42,23 @@ const ExpirationSchema = TimestampSchema.refine(expiration => expiration > Math.
   path: ['expiration'],
 })
 
-const LinkFieldsSchema = z.object({
-  url: UrlSchema,
-  slug: SlugSchema,
-  comment: z.string().trim().max(2048).optional(),
-  expiration: ExpirationSchema.optional(),
-  title: z.string().trim().max(256).optional(),
-  description: z.string().trim().max(2048).optional(),
-  image: z.string().trim().max(128).optional(),
-  apple: z.string().trim().url().max(2048).optional(),
-  google: z.string().trim().url().max(2048).optional(),
-  cloaking: z.boolean().optional(),
-  redirectWithQuery: z.boolean().optional(),
-  password: LinkPasswordSchema.optional(),
-  unsafe: z.boolean().optional(),
-  geo: GeoSchema.optional(),
-  tags: TagsSchema,
+/** The writable link fields. Descriptions document them for generated MCP tool schemas. */
+export const LinkFieldsSchema = z.object({
+  url: UrlSchema.describe('The target URL.'),
+  slug: SlugSchema.describe('The short link slug.'),
+  comment: z.string().trim().max(2048).optional().describe('Internal comment.'),
+  expiration: ExpirationSchema.optional().describe('Expiration timestamp in unix seconds. Must be in the future.'),
+  title: z.string().trim().max(256).optional().describe('Custom title for the link preview.'),
+  description: z.string().trim().max(2048).optional().describe('Custom description for the link preview.'),
+  image: z.string().trim().max(128).optional().describe('Custom image for the link preview.'),
+  apple: z.string().trim().url().max(2048).optional().describe('Apple App Store redirect URL.'),
+  google: z.string().trim().url().max(2048).optional().describe('Google Play Store redirect URL.'),
+  cloaking: z.boolean().optional().describe('Mask the destination URL behind the short link.'),
+  redirectWithQuery: z.boolean().optional().describe('Append incoming query parameters to the destination URL.'),
+  password: LinkPasswordSchema.optional().describe('Password protecting the link.'),
+  unsafe: z.boolean().optional().describe('Show a warning page before redirecting.'),
+  geo: GeoSchema.optional().describe('Geo-routing rules mapping a two-letter country code to a URL.'),
+  tags: TagsSchema.describe('Tags applied to the link.'),
 })
 
 export const CreateLinkSchema = LinkFieldsSchema.extend({
@@ -88,38 +89,38 @@ export const StoredLinkSchema = LinkFieldsSchema.extend({
 const LinkKeywordSchema = z.string().trim().refine(
   value => new TextEncoder().encode(value.toLowerCase().replace(/[!%_]/g, '!$&')).length <= 48,
   { message: 'Search query must not exceed 48 UTF-8 bytes' },
-)
+).describe('Case-insensitive substring matched against slug, URL, comment, or tag. Limited to 48 UTF-8 bytes.')
 
-const LinkTagFilterSchema = z.string().trim().toLowerCase().min(1).max(32)
-const LinkStatusFilterSchema = z.enum(['active', 'expired', 'all']).default('active')
-const LinkQueryLimitSchema = z.coerce.number().int().min(1).max(1000)
+const LinkTagFilterSchema = z.string().trim().toLowerCase().min(1).max(32).describe('Exact tag filter, normalized to lowercase.')
+const LinkStatusFilterSchema = z.enum(['active', 'expired', 'all']).default('active').describe('Expiration status filter.')
+const LinkQueryLimitSchema = z.coerce.number().int().min(1).max(1000).default(20).describe('Maximum number of results to return.')
 
 /** Read contracts shared by the REST link routes and the MCP link tools. */
 export const LinkFilterQuerySchema = z.object({
   q: LinkKeywordSchema.optional(),
-  url: z.string().trim().url().max(2048).optional(),
+  url: z.string().trim().url().max(2048).optional().describe('Target URL matched exactly.'),
   tag: LinkTagFilterSchema.optional(),
   status: LinkStatusFilterSchema,
 })
 
 export const SearchLinksQuerySchema = LinkFilterQuerySchema.extend({
-  limit: LinkQueryLimitSchema.default(20),
+  limit: LinkQueryLimitSchema,
 })
 
 export const ListLinksQuerySchema = z.object({
-  limit: LinkQueryLimitSchema.default(20),
-  cursor: z.string().trim().max(1024).optional(),
-  sort: z.enum(['az', 'za', 'newest', 'oldest']).default('newest'),
+  limit: LinkQueryLimitSchema,
+  cursor: z.string().trim().max(1024).optional().describe('Pagination cursor returned by a previous call.'),
+  sort: z.enum(['az', 'za', 'newest', 'oldest']).default('newest').describe('Sort order.'),
   tag: LinkTagFilterSchema.optional(),
   status: LinkStatusFilterSchema,
 })
 
 export const LinkSlugQuerySchema = z.object({
-  slug: z.string().trim().min(1).max(2048),
+  slug: z.string().trim().min(1).max(2048).describe('The slug of the link.'),
 })
 
 export const DeleteLinkSchema = z.object({
-  slug: SlugSchema.min(1),
+  slug: SlugSchema.min(1).describe('The slug of the link to delete.'),
 })
 
 export function parseLegacyKvLink(value: unknown, slug: string) {
