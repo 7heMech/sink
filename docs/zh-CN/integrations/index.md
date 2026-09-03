@@ -60,7 +60,7 @@ claude mcp add --transport http sink https://your-domain/mcp --header "Authoriza
 
 写入类工具与 REST API 一样遵循 `NUXT_PUBLIC_PREVIEW_MODE` 和 KV 到 D1 的迁移门控；分析类工具读取与仪表盘相同的采样访问日志，因此结果为估算值。
 
-`mcp` 是保留 slug，短链接不会覆盖该端点。
+`mcp` 是保留 slug，该端点始终优先于短链接跳转解析。如果实例上已有 `/mcp` 短链接，升级后它将不再跳转，请先重命名该链接。
 
 ## OpenAPI 转 MCP
 

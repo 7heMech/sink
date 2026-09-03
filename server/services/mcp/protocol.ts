@@ -28,13 +28,12 @@ export const MCP_SERVER_INFO = {
 } as const
 
 export const META_PROTOCOL_VERSION = 'io.modelcontextprotocol/protocolVersion'
-export const META_CLIENT_INFO = 'io.modelcontextprotocol/clientInfo'
 export const META_CLIENT_CAPABILITIES = 'io.modelcontextprotocol/clientCapabilities'
 export const META_SERVER_INFO = 'io.modelcontextprotocol/serverInfo'
 
 /**
- * JSON-RPC codes used by this endpoint. `-32020` and above are allocated by the
- * MCP specification; the rest are standard JSON-RPC 2.0 codes.
+ * JSON-RPC codes emitted by this endpoint. `-32020` and above are allocated by
+ * the MCP specification; the rest are standard JSON-RPC 2.0 codes.
  */
 export const JsonRpcErrorCode = {
   ParseError: -32700,
@@ -43,7 +42,6 @@ export const JsonRpcErrorCode = {
   InvalidParams: -32602,
   InternalError: -32603,
   HeaderMismatch: -32020,
-  MissingRequiredClientCapability: -32021,
   UnsupportedProtocolVersion: -32022,
 } as const
 
@@ -79,9 +77,15 @@ export function decodeHeaderValue(value: string): string {
     return value
 
   const encoded = value.slice(BASE64_SENTINEL_PREFIX.length, -BASE64_SENTINEL_SUFFIX.length)
-  const binary = atob(encoded)
-  const bytes = Uint8Array.from(binary, character => character.charCodeAt(0))
-  return new TextDecoder().decode(bytes)
+  try {
+    const bytes = Uint8Array.from(atob(encoded), character => character.charCodeAt(0))
+    return new TextDecoder().decode(bytes)
+  }
+  catch {
+    // An undecodable value cannot match the body, so hand it back unchanged and
+    // let header validation reject the request instead of throwing.
+    return value
+  }
 }
 
 export function isJsonRpcRequest(value: unknown): value is JsonRpcRequest {

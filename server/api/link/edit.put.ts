@@ -37,13 +37,7 @@ defineRouteMeta({
 })
 
 export default eventHandler(async (event) => {
-  const { previewMode } = useRuntimeConfig(event).public
-  if (previewMode) {
-    throw createError({
-      status: 403,
-      statusText: 'Preview mode cannot edit links.',
-    })
-  }
+  assertLinkWritesAllowed(event, 'edit')
   const link = await readValidatedBody(event, EditLinkSchema.parse)
   link.slug = normalizeSlug(event, link.slug)
 

@@ -85,6 +85,43 @@ export const StoredLinkSchema = LinkFieldsSchema.extend({
   expiration: TimestampSchema.optional(),
 })
 
+const LinkKeywordSchema = z.string().trim().refine(
+  value => new TextEncoder().encode(value.toLowerCase().replace(/[!%_]/g, '!$&')).length <= 48,
+  { message: 'Search query must not exceed 48 UTF-8 bytes' },
+)
+
+const LinkTagFilterSchema = z.string().trim().toLowerCase().min(1).max(32)
+const LinkStatusFilterSchema = z.enum(['active', 'expired', 'all']).default('active')
+const LinkQueryLimitSchema = z.coerce.number().int().min(1).max(1000)
+
+/** Read contracts shared by the REST link routes and the MCP link tools. */
+export const LinkFilterQuerySchema = z.object({
+  q: LinkKeywordSchema.optional(),
+  url: z.string().trim().url().max(2048).optional(),
+  tag: LinkTagFilterSchema.optional(),
+  status: LinkStatusFilterSchema,
+})
+
+export const SearchLinksQuerySchema = LinkFilterQuerySchema.extend({
+  limit: LinkQueryLimitSchema.default(20),
+})
+
+export const ListLinksQuerySchema = z.object({
+  limit: LinkQueryLimitSchema.default(20),
+  cursor: z.string().trim().max(1024).optional(),
+  sort: z.enum(['az', 'za', 'newest', 'oldest']).default('newest'),
+  tag: LinkTagFilterSchema.optional(),
+  status: LinkStatusFilterSchema,
+})
+
+export const LinkSlugQuerySchema = z.object({
+  slug: z.string().trim().min(1).max(2048),
+})
+
+export const DeleteLinkSchema = z.object({
+  slug: SlugSchema.min(1),
+})
+
 export function parseLegacyKvLink(value: unknown, slug: string) {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     return StoredLinkSchema.safeParse(value)

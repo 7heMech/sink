@@ -2,7 +2,15 @@ import type { H3Event } from 'h3'
 import type { EditLink, Link } from '#shared/schemas/link'
 import { createError } from 'h3'
 import { z } from 'zod'
-import { CreateLinkSchema, EditLinkSchema, SlugSchema } from '#shared/schemas/link'
+import {
+  CreateLinkSchema,
+  DeleteLinkSchema,
+  EditLinkSchema,
+  LinkFilterQuerySchema,
+  LinkSlugQuerySchema,
+  ListLinksQuerySchema,
+  SearchLinksQuerySchema,
+} from '#shared/schemas/link'
 import { QuerySchema } from '#shared/schemas/query'
 import {
   buildCountersQuery,
@@ -16,6 +24,7 @@ import { useWAE } from '../../utils/cloudflare'
 import { sanitizeLinkPassword, sanitizeLinksPassword } from '../../utils/link-password'
 import {
   applyEditableLinkPassword,
+  assertLinkWritesAllowed,
   buildLinkResponse,
   detectUnsafeLink,
   hashLinkPasswordForCreate,
@@ -124,7 +133,6 @@ const analyticsFilterProperties = {
   browserType: { type: 'string', description: 'Comma-separated browser types to filter on.' },
   device: { type: 'string', description: 'Comma-separated devices to filter on.' },
   deviceType: { type: 'string', description: 'Comma-separated device types to filter on.' },
-  limit: { type: 'integer', minimum: 1, description: 'Maximum number of rows to return.' },
 } as const
 
 function objectSchema(properties: Record<string, unknown>, required?: string[]) {
@@ -133,16 +141,6 @@ function objectSchema(properties: Record<string, unknown>, required?: string[]) 
     properties,
     ...(required?.length ? { required } : {}),
     additionalProperties: false,
-  }
-}
-
-function assertWritable(event: H3Event, action: string) {
-  const { previewMode } = useRuntimeConfig(event).public
-  if (previewMode) {
-    throw createError({
-      status: 403,
-      statusText: `Preview mode cannot ${action} links.`,
-    })
   }
 }
 
@@ -161,13 +159,7 @@ export const mcpTools: McpTool[] = [
     annotations: { readOnlyHint: true, openWorldHint: false },
     async handler(event, args) {
       await assertLinkStoreReady(event)
-      const query = z.object({
-        limit: z.coerce.number().int().min(1).max(1000).default(20),
-        cursor: z.string().trim().max(1024).optional(),
-        sort: z.enum(['az', 'za', 'newest', 'oldest']).default('newest'),
-        tag: z.string().trim().toLowerCase().min(1).max(32).optional(),
-        status: z.enum(['active', 'expired', 'all']).default('active'),
-      }).parse(args)
+      const query = ListLinksQuerySchema.parse(args)
 
       const list = await listLinks(event, query)
       return { ...list, links: sanitizeLinksPassword(list.links) }
@@ -184,21 +176,12 @@ export const mcpTools: McpTool[] = [
     annotations: { readOnlyHint: true, openWorldHint: false },
     async handler(event, args) {
       await assertLinkStoreReady(event)
-      const query = z.object({
-        q: z.string().trim().refine(
-          value => new TextEncoder().encode(value.toLowerCase().replace(/[!%_]/g, '!$&')).length <= 48,
-          { message: 'Search query must not exceed 48 UTF-8 bytes' },
-        ).optional(),
-        url: z.string().trim().url().max(2048).optional(),
-        limit: z.coerce.number().int().min(1).max(1000).default(20),
-        tag: z.string().trim().toLowerCase().min(1).max(32).optional(),
-        status: z.enum(['active', 'expired', 'all']).default('active'),
-      }).parse(args)
+      const query = SearchLinksQuerySchema.parse(args)
 
       if (!query.q && !query.url)
-        return []
+        return { links: [] }
 
-      return await searchLinks(event, query)
+      return { links: await searchLinks(event, query) }
     },
   },
   {
@@ -211,7 +194,7 @@ export const mcpTools: McpTool[] = [
     annotations: { readOnlyHint: true, openWorldHint: false },
     async handler(event, args) {
       await assertLinkStoreReady(event)
-      const { slug } = z.object({ slug: z.string().trim().min(1).max(2048) }).parse(args)
+      const { slug } = LinkSlugQuerySchema.parse(args)
       const { link, metadata } = await getLinkWithMetadata(event, normalizeSlug(event, slug))
       if (!link)
         throw createError({ status: 404, statusText: 'Link not found' })
@@ -227,12 +210,7 @@ export const mcpTools: McpTool[] = [
     annotations: { readOnlyHint: true, openWorldHint: false },
     async handler(event, args) {
       await assertLinkStoreReady(event)
-      const query = z.object({
-        q: z.string().trim().max(48).optional(),
-        url: z.string().trim().url().max(2048).optional(),
-        tag: z.string().trim().toLowerCase().min(1).max(32).optional(),
-        status: z.enum(['active', 'expired', 'all']).default('active'),
-      }).parse(args)
+      const query = LinkFilterQuerySchema.parse(args)
 
       return { count: await countLinks(event, query) }
     },
@@ -245,7 +223,7 @@ export const mcpTools: McpTool[] = [
     annotations: { readOnlyHint: true, openWorldHint: false },
     async handler(event) {
       await assertLinkStoreReady(event)
-      return await listTags(event)
+      return { tags: await listTags(event) }
     },
   },
   {
@@ -270,11 +248,11 @@ export const mcpTools: McpTool[] = [
   {
     name: 'update_link',
     title: 'Update link',
-    description: 'Replace an existing link identified by slug. Every writable field is overwritten, so send the complete link.',
+    description: 'Replace an existing link identified by slug. Every writable field is overwritten and any omitted optional field is cleared, so read the link with get_link first and send it back complete.',
     inputSchema: objectSchema(linkWriteProperties, ['url', 'slug']),
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     async handler(event, args) {
-      assertWritable(event, 'edit')
+      assertLinkWritesAllowed(event, 'edit')
       await assertLinkStoreReady(event)
 
       const link: EditLink = EditLinkSchema.parse(args)
@@ -334,10 +312,10 @@ export const mcpTools: McpTool[] = [
     }, ['slug']),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     async handler(event, args) {
-      assertWritable(event, 'delete')
+      assertLinkWritesAllowed(event, 'delete')
       await assertLinkStoreReady(event)
 
-      const parsed = z.object({ slug: SlugSchema.min(1) }).parse(args)
+      const parsed = DeleteLinkSchema.parse(args)
       const slug = normalizeSlug(event, parsed.slug)
       await deleteLink(event, slug)
       return { slug, deleted: true }
@@ -376,6 +354,7 @@ export const mcpTools: McpTool[] = [
     inputSchema: objectSchema({
       ...analyticsFilterProperties,
       type: { type: 'string', enum: [...metricTypes], description: 'The dimension to group by.' },
+      limit: { type: 'integer', minimum: 1, description: 'Maximum number of rows to return.' },
     }, ['type']),
     annotations: { readOnlyHint: true, openWorldHint: false },
     async handler(event, args) {

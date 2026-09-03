@@ -21,6 +21,17 @@ interface LinkResponse {
   shortLink: string
 }
 
+/** Preview instances accept reads but reject link mutations. */
+export function assertLinkWritesAllowed(event: H3Event, action: string): void {
+  const { previewMode } = useRuntimeConfig(event).public
+  if (previewMode) {
+    throw createError({
+      status: 403,
+      statusText: `Preview mode cannot ${action} links.`,
+    })
+  }
+}
+
 export async function prepareIncomingLink(event: H3Event, link: Link): Promise<void> {
   link.slug = normalizeSlug(event, link.slug)
   await detectUnsafeLink(event, link)

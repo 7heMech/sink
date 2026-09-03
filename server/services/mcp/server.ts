@@ -54,7 +54,9 @@ function methodNotFound(id: JsonRpcId | undefined, method: string): McpResponse 
   }, 404)
 }
 
-async function runToolCall(event: H3Event, request: JsonRpcRequest): Promise<{ error?: McpResponse, result?: McpToolResult }> {
+type ToolCallOutcome = { error: McpResponse } | { result: McpToolResult }
+
+async function runToolCall(event: H3Event, request: JsonRpcRequest): Promise<ToolCallOutcome> {
   const name = request.params?.name
   if (typeof name !== 'string') {
     return {
@@ -108,13 +110,13 @@ async function dispatchModern(event: H3Event, request: JsonRpcRequest): Promise<
       })
 
     case 'tools/call': {
-      const { error, result } = await runToolCall(event, request)
-      if (error || !result)
-        return error ?? methodNotFound(id, request.method)
+      const outcome = await runToolCall(event, request)
+      if ('error' in outcome)
+        return outcome.error
 
       return jsonRpcResult(id, {
         resultType: 'complete',
-        ...result,
+        ...outcome.result,
         _meta: resultMeta(),
       })
     }
@@ -154,11 +156,8 @@ async function dispatchLegacy(event: H3Event, request: JsonRpcRequest): Promise<
       return jsonRpcResult(id, { tools: listedTools() })
 
     case 'tools/call': {
-      const { error, result } = await runToolCall(event, request)
-      if (error || !result)
-        return error ?? methodNotFound(id, request.method)
-
-      return jsonRpcResult(id, { ...result })
+      const outcome = await runToolCall(event, request)
+      return 'error' in outcome ? outcome.error : jsonRpcResult(id, { ...outcome.result })
     }
 
     case 'ping':

@@ -49,9 +49,9 @@ function modernHeaders(method: string, name?: string) {
   }
 }
 
-function postMcp(body: unknown, headers: Record<string, string>, withAuth = true) {
+function postMcp(body: unknown, headers: Record<string, string>, withAuth = true, path = '/mcp') {
   const request = withAuth ? fetchWithAuth : fetch
-  return request('/mcp', { method: 'POST', body: JSON.stringify(body), headers })
+  return request(path, { method: 'POST', body: JSON.stringify(body), headers })
 }
 
 function postModern(id: string | number, method: string, params: Record<string, unknown> = {}, headerOverrides: Record<string, string> = {}) {
@@ -147,6 +147,14 @@ describe('/mcp transport', () => {
     expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(-32020)
   })
 
+  it('rejects a malformed base64 sentinel without throwing', async () => {
+    const response = await postModern(1, 'tools/call', { name: 'list_tags', arguments: {} }, {
+      'Mcp-Name': '=?base64?not valid base64!!?=',
+    })
+    expect(response.status).toBe(400)
+    expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(-32020)
+  })
+
   it('reports supported versions for an unknown protocol version', async () => {
     const response = await postMcp(
       { jsonrpc: '2.0', id: 1, method: 'tools/list', params: { _meta: { [META_VERSION]: '1900-01-01' } } },
@@ -231,6 +239,15 @@ describe('/mcp tools', () => {
     expect(payload.result?.content[0].text).toContain('Invalid arguments')
   })
 
+  it('returns search matches under an object key', async () => {
+    const slug = trackSlug(`mcp-${crypto.randomUUID()}`)
+    await callTool('create_link', { url: 'https://example.com/mcp-search', slug })
+
+    const { payload } = await callTool('search_links', { q: slug })
+    expect(Array.isArray(payload.result?.structuredContent.links)).toBe(true)
+    expect(payload.result?.structuredContent.links[0].slug).toBe(slug)
+  })
+
   it('rejects an unknown tool with a protocol error', async () => {
     const response = await postModern(1, 'tools/call', { name: 'no_such_tool', arguments: {} })
     expect(response.status).toBe(400)
@@ -242,7 +259,7 @@ describe('/mcp tools', () => {
     expect(typeof counted.result?.structuredContent.count).toBe('number')
 
     const { payload: tagged } = await callTool('list_tags', {})
-    expect(Array.isArray(tagged.result?.structuredContent)).toBe(true)
+    expect(Array.isArray(tagged.result?.structuredContent.tags)).toBe(true)
   })
 })
 
@@ -274,5 +291,29 @@ describe('/mcp backward compatibility', () => {
     })
     const calledPayload = await called.json() as JsonRpcEnvelope
     expect(calledPayload.result?.structuredContent.link.slug).toBe(slug)
+  })
+})
+
+describe('/mcp path normalization', () => {
+  // The router resolves these to the same handler, so authentication has to
+  // match the normalized pathname rather than the raw request path.
+  it.each(['/mcp/', '/mcp//'])('rejects unauthenticated requests to %s', async (path) => {
+    const response = await postMcp(
+      modernBody(1, 'tools/call', { name: 'list_tags', arguments: {} }),
+      modernHeaders('tools/call', 'list_tags'),
+      false,
+      path,
+    )
+    expect(response.status).toBe(401)
+  })
+
+  it('still serves the trailing-slash path when authenticated', async () => {
+    const response = await postMcp(
+      modernBody(1, 'tools/list'),
+      modernHeaders('tools/list'),
+      true,
+      '/mcp/',
+    )
+    expect(response.status).toBe(200)
   })
 })

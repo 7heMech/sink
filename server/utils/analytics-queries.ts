@@ -32,14 +32,39 @@ export const MetricsQuerySchema = QuerySchema.extend({
   type: z.enum(validMetricTypes),
 })
 
+export const HeatmapQuerySchema = QuerySchema.extend({
+  clientTimezone: ClientTimezoneSchema,
+})
+
+export const StatsExportQuerySchema = QuerySchema.superRefine((query, ctx) => {
+  if (query.startAt !== undefined && query.endAt !== undefined && query.startAt > query.endAt) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'startAt must be less than or equal to endAt',
+      path: ['startAt'],
+    })
+  }
+})
+
 export type ViewsQuery = z.infer<typeof ViewsQuerySchema>
 export type MetricsQuery = z.infer<typeof MetricsQuerySchema>
+export type HeatmapQuery = z.infer<typeof HeatmapQuerySchema>
 
+/** Weighted distinct count: COUNT(DISTINCT col) * SUM(_sample_interval) / COUNT() ≈ actual distinct count */
 function weightedDistinct(column: string): RawBuilder<number> {
-  // Weighted distinct count: COUNT(DISTINCT col) * SUM(_sample_interval) / COUNT() ≈ actual distinct count
   return sql<number>`ROUND(COUNT(DISTINCT ${sql.ref(column)}) * SUM(_sample_interval) / COUNT())`
 }
 
+function weightedReferers(column: string): RawBuilder<number> {
+  const reference = sql.ref(column)
+  return sql<number>`ROUND((COUNT(DISTINCT ${reference}) - MAX(if(${reference} = ${sql.lit('')}, ${sql.lit(1)}, ${sql.lit(0)}))) * SUM(_sample_interval) / COUNT())`
+}
+
+function queryLimit(query: Query): number {
+  return Math.max(0, Math.floor(query.limit))
+}
+
+/** The dataset query every analytics endpoint starts from, with the shared filters applied. */
 function filteredQuery(query: Query, event: H3Event) {
   const filter = buildAnalyticsFilter(query)
   const { dataset } = useRuntimeConfig(event)
@@ -73,7 +98,6 @@ export function buildViewsQuery(query: ViewsQuery, event: H3Event) {
 }
 
 export function buildMetricsQuery(query: MetricsQuery, event: H3Event) {
-  const limit = Math.max(0, Math.floor(query.limit))
   const metricColumn = logsMap[query.type] as string
 
   return filteredQuery(query, event)
@@ -83,5 +107,62 @@ export function buildMetricsQuery(query: MetricsQuery, event: H3Event) {
     ])
     .groupBy('name')
     .orderBy('count', 'desc')
-    .limit(sql.lit(limit))
+    .limit(sql.lit(queryLimit(query)))
+}
+
+export function buildHeatmapQuery(query: HeatmapQuery, event: H3Event) {
+  const timezone = getSafeTimezone(query.clientTimezone)
+  const tzTimestamp = sql<string>`toDateTime(toUnixTimestamp(${sql.ref('timestamp')}), ${sql.lit(timezone)})`
+
+  return filteredQuery(query, event)
+    .select([
+      sql<number>`toDayOfWeek(${tzTimestamp})`.as('weekday'),
+      sql<number>`toHour(${tzTimestamp})`.as('hour'),
+      sql<number>`SUM(_sample_interval)`.as('visits'),
+      sql<number>`COUNT(DISTINCT ${sql.ref(logsMap.ip!)})`.as('visitors'),
+    ])
+    .groupBy(['weekday', 'hour'])
+    .orderBy('weekday')
+    .orderBy('hour')
+}
+
+export function buildAccessExportQuery(query: Query, event: H3Event) {
+  return filteredQuery(query, event)
+    .select([
+      sql.ref(logsMap.slug!).as('slug'),
+      sql.ref(logsMap.url!).as('url'),
+      weightedDistinct(logsMap.ip!).as('viewer'),
+      sql<number>`SUM(_sample_interval)`.as('views'),
+      weightedReferers(logsMap.referer!).as('referer'),
+    ])
+    .groupBy(['slug', 'url'])
+    .orderBy('views', 'desc')
+}
+
+export function buildEventsQuery(query: Query, event: H3Event) {
+  return filteredQuery(query, event)
+    .selectAll()
+    .orderBy('timestamp', 'desc')
+    .limit(sql.lit(queryLimit(query)))
+}
+
+export function buildLocationsQuery(query: Query, event: H3Event) {
+  const filter = buildAnalyticsFilter(query)
+  const { dataset } = useRuntimeConfig(event)
+  const analyticsQuery = createAnalyticsQuery(dataset)
+    .where('double1', '!=', sql.lit(0))
+    .where('double2', '!=', sql.lit(0))
+  const withFilter = filter ? analyticsQuery.where(filter) : analyticsQuery
+
+  // Use SUM(_sample_interval) instead of count() to account for sampling
+  return withFilter
+    .select([
+      sql.ref('blob8').as(blobsMap.blob8),
+      sql.ref('double1').as(doublesMap.double1),
+      sql.ref('double2').as(doublesMap.double2),
+      sql<number>`SUM(_sample_interval)`.as('count'),
+    ])
+    .groupBy(['blob8', 'double1', 'double2'])
+    .orderBy('count', 'desc')
+    .limit(sql.lit(queryLimit(query)))
 }
