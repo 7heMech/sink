@@ -1,7 +1,12 @@
 import { timingSafeEqual } from 'node:crypto'
 
+/** The MCP endpoint is authenticated exactly like the REST API. */
+function isProtectedPath(path: string): boolean {
+  return path.startsWith('/api/') || path === '/mcp' || path.startsWith('/mcp?')
+}
+
 export default eventHandler(async (event) => {
-  if (!event.path.startsWith('/api/'))
+  if (!isProtectedPath(event.path))
     return
 
   const token = getHeader(event, 'Authorization')?.replace(/^Bearer\s+/, '')
@@ -27,6 +32,8 @@ export default eventHandler(async (event) => {
       statusText: 'Forbidden',
     })
   }
+
+  setResponseHeader(event, 'WWW-Authenticate', 'Bearer')
 
   if (token && token.length < 8) {
     throw createError({
