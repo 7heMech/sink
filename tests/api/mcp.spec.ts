@@ -172,6 +172,12 @@ describe('/mcp transport', () => {
     expect(response.status).toBe(404)
     expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(-32601)
   })
+
+  it('returns 404 for ping, which this revision removed', async () => {
+    const response = await postModern(1, 'ping')
+    expect(response.status).toBe(404)
+    expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(-32601)
+  })
 })
 
 describe('/mcp discovery', () => {
@@ -184,6 +190,8 @@ describe('/mcp discovery', () => {
     expect(payload.result?.supportedVersions).toContain(MODERN_VERSION)
     expect(payload.result?.capabilities.tools).toBeDefined()
     expect(payload.result?._meta['io.modelcontextprotocol/serverInfo'].name).toBe('sink')
+    expect(payload.result?.ttlMs).toBeGreaterThan(0)
+    expect(payload.result?.cacheScope).toBe('public')
   })
 
   it('lists tools with input schemas', async () => {
@@ -191,6 +199,9 @@ describe('/mcp discovery', () => {
     expect(response.status).toBe(200)
 
     const payload = await response.json() as JsonRpcEnvelope
+    expect(payload.result?.ttlMs).toBeGreaterThan(0)
+    expect(payload.result?.cacheScope).toBe('public')
+
     const names = payload.result?.tools.map((tool: { name: string }) => tool.name)
     expect(names).toContain('create_link')
     expect(names).toContain('get_analytics_metrics')
@@ -291,6 +302,12 @@ describe('/mcp backward compatibility', () => {
     })
     const calledPayload = await called.json() as JsonRpcEnvelope
     expect(calledPayload.result?.structuredContent.link.slug).toBe(slug)
+  })
+
+  it('still answers ping for initialization-based clients', async () => {
+    const response = await postLegacy(4, 'ping')
+    expect(response.status).toBe(200)
+    expect((await response.json() as JsonRpcEnvelope).result).toEqual({})
   })
 })
 

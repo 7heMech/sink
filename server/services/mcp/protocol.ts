@@ -121,13 +121,13 @@ export function jsonRpcError(id: JsonRpcId | undefined, error: JsonRpcErrorBody,
   }
 }
 
-export function unsupportedProtocolVersion(id: JsonRpcId | undefined, requested: string | undefined): McpResponse {
+export function unsupportedProtocolVersion(id: JsonRpcId | undefined, requested: string): McpResponse {
   return jsonRpcError(id, {
     code: JsonRpcErrorCode.UnsupportedProtocolVersion,
     message: 'Unsupported protocol version',
     data: {
       supported: SUPPORTED_PROTOCOL_VERSIONS,
-      requested: requested ?? null,
+      requested,
     },
   }, 400)
 }

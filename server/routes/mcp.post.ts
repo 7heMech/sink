@@ -15,7 +15,7 @@ defineRouteMeta({
             properties: {
               jsonrpc: { type: 'string', enum: ['2.0'] },
               id: { type: ['string', 'integer'], description: 'Request id. Omitted for notifications, which are answered with 202.' },
-              method: { type: 'string', description: 'One of server/discover, tools/list, tools/call, ping, or initialize for older clients.' },
+              method: { type: 'string', description: 'One of server/discover, tools/list, or tools/call. Older clients may also send initialize and ping.' },
               params: { type: 'object', additionalProperties: true },
             },
           },

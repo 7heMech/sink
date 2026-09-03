@@ -33,6 +33,17 @@ const SERVER_CAPABILITIES = {
   tools: { listChanged: false },
 }
 
+/**
+ * Caching hints the stateless revision requires on every `server/discover` and
+ * `tools/list` result. Both answers are compile-time constants that hold no
+ * per-caller data, so they are public and only change when the app is
+ * redeployed; an hour of client-side freshness costs nothing.
+ */
+const CACHE_HINTS = {
+  ttlMs: 3_600_000,
+  cacheScope: 'public',
+} as const
+
 function resultMeta() {
   return { [META_SERVER_INFO]: MCP_SERVER_INFO }
 }
@@ -99,6 +110,7 @@ async function dispatchModern(event: H3Event, request: JsonRpcRequest): Promise<
         supportedVersions: SUPPORTED_PROTOCOL_VERSIONS,
         capabilities: SERVER_CAPABILITIES,
         instructions: INSTRUCTIONS,
+        ...CACHE_HINTS,
         _meta: resultMeta(),
       })
 
@@ -106,6 +118,7 @@ async function dispatchModern(event: H3Event, request: JsonRpcRequest): Promise<
       return jsonRpcResult(id, {
         resultType: 'complete',
         tools: listedTools(),
+        ...CACHE_HINTS,
         _meta: resultMeta(),
       })
 
@@ -121,9 +134,7 @@ async function dispatchModern(event: H3Event, request: JsonRpcRequest): Promise<
       })
     }
 
-    case 'ping':
-      return jsonRpcResult(id, { resultType: 'complete', _meta: resultMeta() })
-
+    // `ping` was removed in this revision, so it falls through to 404.
     default:
       return methodNotFound(id, request.method)
   }
