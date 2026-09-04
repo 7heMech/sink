@@ -1,7 +1,11 @@
 import { timingSafeEqual } from 'node:crypto'
 
 export default eventHandler(async (event) => {
-  if (!event.path.startsWith('/api/'))
+  // The MCP endpoint authenticates exactly like the REST API. Trailing slashes
+  // are stripped because the router treats `/mcp/` as `/mcp`, and a raw path
+  // comparison would let that form through unauthenticated.
+  const pathname = getRequestURL(event).pathname.replace(/\/+$/, '')
+  if (!pathname.startsWith('/api/') && pathname !== '/mcp')
     return
 
   const token = getHeader(event, 'Authorization')?.replace(/^Bearer\s+/, '')
@@ -27,6 +31,8 @@ export default eventHandler(async (event) => {
       statusText: 'Forbidden',
     })
   }
+
+  setResponseHeader(event, 'WWW-Authenticate', 'Bearer')
 
   if (token && token.length < 8) {
     throw createError({
