@@ -152,7 +152,7 @@ const toolDefinitions: McpToolDefinition[] = [
     name: 'create_link',
     description: 'Create a short link. Fails when the slug is already taken; use upsert_link to reuse an existing link instead.',
     inputSchema: inputSchema(CreateLinkArgsSchema),
-    annotations: { destructiveHint: false },
+    annotations: { destructiveHint: false, idempotentHint: false },
     async handler(event, args) {
       await assertLinkStoreReady(event)
       const link = CreateLinkSchema.parse(args)
