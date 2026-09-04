@@ -17,12 +17,12 @@ npx skills add miantiao-me/sink
 
 ## MCP Server
 
-Sink serves a Model Context Protocol endpoint at `POST /mcp`. It implements the stateless [2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) revision of the Streamable HTTP transport, and also answers the initialization-based revisions that older clients still speak, so current MCP clients work without extra configuration.
+Sink serves a Model Context Protocol endpoint at `POST /api/mcp`. It implements the stateless [2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) revision of the Streamable HTTP transport, and also answers the initialization-based revisions that older clients still speak, so current MCP clients work without extra configuration.
 
 The endpoint authenticates with the same bearer token as the REST API, so no separate credential is needed. See [API authentication](/api/#authentication).
 
 ```sh
-claude mcp add --transport http sink https://your-domain/mcp --header "Authorization: Bearer YOUR_SITE_TOKEN"
+claude mcp add --transport http sink https://your-domain/api/mcp --header "Authorization: Bearer YOUR_SITE_TOKEN"
 ```
 
 Any client that supports an HTTP transport with custom headers can connect the same way:
@@ -32,7 +32,7 @@ Any client that supports an HTTP transport with custom headers can connect the s
   "mcpServers": {
     "sink": {
       "type": "http",
-      "url": "https://your-domain/mcp",
+      "url": "https://your-domain/api/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_SITE_TOKEN"
       }
@@ -60,7 +60,7 @@ Any client that supports an HTTP transport with custom headers can connect the s
 
 The write tools honor `NUXT_PUBLIC_PREVIEW_MODE` and the KV-to-D1 migration gate exactly as the REST API does, and analytics tools read the same sampled access log as the dashboard, so their counts are estimates.
 
-`mcp` is a reserved slug, so the endpoint always resolves ahead of link redirection. An instance that already serves a short link on `/mcp` will stop redirecting it after upgrading; rename that link first.
+The endpoint sits under `/api/` so it stays out of the short-link namespace: a slug cannot contain a slash, so no link can shadow it and no reserved slug is needed. Upgrading never takes a slug away from an instance that already uses one.
 
 ## OpenAPI to MCP
 

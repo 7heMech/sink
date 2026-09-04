@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { deleteStoredLinks, fetch, fetchWithAuth, setLinkStoreD1Mode } from '../utils'
 
+const MCP_PATH = '/api/mcp'
 const MODERN_VERSION = '2026-07-28'
 const LEGACY_VERSION = '2025-11-25'
 const META_VERSION = 'io.modelcontextprotocol/protocolVersion'
@@ -49,7 +50,7 @@ function modernHeaders(method: string, name?: string) {
   }
 }
 
-function postMcp(body: unknown, headers: Record<string, string>, withAuth = true, path = '/mcp') {
+function postMcp(body: unknown, headers: Record<string, string>, withAuth = true, path = MCP_PATH) {
   const request = withAuth ? fetchWithAuth : fetch
   return request(path, { method: 'POST', body: JSON.stringify(body), headers })
 }
@@ -74,7 +75,7 @@ function trackSlug(slug: string) {
   return slug
 }
 
-describe('/mcp authentication', () => {
+describe('/api/mcp authentication', () => {
   it('rejects unauthenticated requests', async () => {
     const response = await postMcp(modernBody(1, 'tools/list'), modernHeaders('tools/list'), false)
     expect(response.status).toBe(401)
@@ -90,12 +91,12 @@ describe('/mcp authentication', () => {
   })
 })
 
-describe('/mcp transport', () => {
+describe('/api/mcp transport', () => {
   it('rejects GET and DELETE with 405', async () => {
-    const get = await fetchWithAuth('/mcp')
+    const get = await fetchWithAuth(MCP_PATH)
     expect(get.status).toBe(405)
 
-    const del = await fetchWithAuth('/mcp', { method: 'DELETE' })
+    const del = await fetchWithAuth(MCP_PATH, { method: 'DELETE' })
     expect(del.status).toBe(405)
   })
 
@@ -109,7 +110,7 @@ describe('/mcp transport', () => {
   })
 
   const rejected: [string, () => Promise<Response>, number][] = [
-    ['the body is malformed JSON', () => fetchWithAuth('/mcp', { method: 'POST', body: '{ not json', headers: { 'Content-Type': 'application/json' } }), -32700],
+    ['the body is malformed JSON', () => fetchWithAuth(MCP_PATH, { method: 'POST', body: '{ not json', headers: { 'Content-Type': 'application/json' } }), -32700],
     ['messages are batched', () => postMcp([modernBody(1, 'tools/list')], modernHeaders('tools/list')), -32600],
     ['Mcp-Method disagrees with the body', () => postModern(1, 'tools/list', {}, { 'Mcp-Method': 'tools/call' }), -32020],
     ['Mcp-Name disagrees with the body', () => postModern(1, 'tools/call', { name: 'list_tags', arguments: {} }, { 'Mcp-Name': 'list_links' }), -32020],
@@ -144,7 +145,7 @@ describe('/mcp transport', () => {
   })
 })
 
-describe('/mcp discovery', () => {
+describe('/api/mcp discovery', () => {
   it('answers server/discover with supported versions and capabilities', async () => {
     const response = await postModern('discover-1', 'server/discover')
     expect(response.status).toBe(200)
@@ -176,7 +177,7 @@ describe('/mcp discovery', () => {
   })
 })
 
-describe('/mcp tools', () => {
+describe('/api/mcp tools', () => {
   it('creates and reads a link', async () => {
     const slug = trackSlug(`mcp-${crypto.randomUUID()}`)
 
@@ -236,7 +237,7 @@ describe('/mcp tools', () => {
   })
 })
 
-describe('/mcp backward compatibility', () => {
+describe('/api/mcp backward compatibility', () => {
   it('answers the initialize handshake without minting a session', async () => {
     const response = await postLegacy(1, 'initialize', {
       protocolVersion: LEGACY_VERSION,
@@ -273,11 +274,28 @@ describe('/mcp backward compatibility', () => {
   })
 })
 
-describe('/mcp path normalization', () => {
-  // The router resolves these to the same handler, so authentication has to
-  // match the normalized pathname rather than the raw request path.
-  it.each([['/mcp/', false, 401], ['/mcp//', false, 401], ['/mcp/', true, 200]] as const)('answers %s with auth=%s as %i', async (path, withAuth, status) => {
+describe('/api/mcp path normalization', () => {
+  // The router folds these onto the same handler, and the auth middleware's
+  // `/api/` prefix covers every one of them.
+  it.each([[`${MCP_PATH}/`, false, 401], [`${MCP_PATH}//`, false, 401], [`${MCP_PATH}/`, true, 200]] as const)('answers %s with auth=%s as %i', async (path, withAuth, status) => {
     const response = await postMcp(modernBody(1, 'tools/list'), modernHeaders('tools/list'), withAuth, path)
     expect(response.status).toBe(status)
+  })
+})
+
+describe('/api/mcp slug isolation', () => {
+  // Living under `/api/` keeps the endpoint out of the link namespace entirely:
+  // `slugRegex` rejects the slash, so `1.redirect.ts` skips the path without a
+  // reserved slug, and no instance loses a short link by upgrading.
+  it('leaves a short link on /mcp redirecting', async () => {
+    const slug = trackSlug('mcp')
+    const created = await callTool('create_link', { url: 'https://example.com/slug-isolation', slug })
+    expect(created.payload.result?.structuredContent.link.slug).toBe(slug)
+
+    const redirect = await fetch(`/${slug}`, { redirect: 'manual' })
+    expect(redirect.status).toBe(301)
+    expect(redirect.headers.get('location')).toBe('https://example.com/slug-isolation')
+
+    expect((await postModern(1, 'tools/list')).status).toBe(200)
   })
 })

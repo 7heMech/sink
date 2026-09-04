@@ -17,12 +17,12 @@ npx skills add miantiao-me/sink
 
 ## MCP Server
 
-Sink 在 `POST /mcp` 提供 Model Context Protocol 端点。它实现了 Streamable HTTP 传输的无状态 [2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) 修订版，同时兼容旧客户端仍在使用的基于初始化握手的修订版，因此现有 MCP 客户端无需额外配置即可使用。
+Sink 在 `POST /api/mcp` 提供 Model Context Protocol 端点。它实现了 Streamable HTTP 传输的无状态 [2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) 修订版，同时兼容旧客户端仍在使用的基于初始化握手的修订版，因此现有 MCP 客户端无需额外配置即可使用。
 
 该端点使用与 REST API 相同的 Bearer 令牌进行认证，无需单独的凭据。详见 [API 身份认证](/zh-CN/api/#身份认证)。
 
 ```sh
-claude mcp add --transport http sink https://your-domain/mcp --header "Authorization: Bearer YOUR_SITE_TOKEN"
+claude mcp add --transport http sink https://your-domain/api/mcp --header "Authorization: Bearer YOUR_SITE_TOKEN"
 ```
 
 任何支持 HTTP 传输与自定义请求头的客户端都可以用同样的方式连接：
@@ -32,7 +32,7 @@ claude mcp add --transport http sink https://your-domain/mcp --header "Authoriza
   "mcpServers": {
     "sink": {
       "type": "http",
-      "url": "https://your-domain/mcp",
+      "url": "https://your-domain/api/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_SITE_TOKEN"
       }
@@ -60,7 +60,7 @@ claude mcp add --transport http sink https://your-domain/mcp --header "Authoriza
 
 写入类工具与 REST API 一样遵循 `NUXT_PUBLIC_PREVIEW_MODE` 和 KV 到 D1 的迁移门控；分析类工具读取与仪表盘相同的采样访问日志，因此结果为估算值。
 
-`mcp` 是保留 slug，该端点始终优先于短链接跳转解析。如果实例上已有 `/mcp` 短链接，升级后它将不再跳转，请先重命名该链接。
+该端点位于 `/api/` 之下，因此不占用短链接命名空间：slug 不能包含斜杠，所以没有短链接会遮蔽它，也无需保留 slug。升级不会夺走实例上已在使用的任何 slug。
 
 ## OpenAPI 转 MCP
 
