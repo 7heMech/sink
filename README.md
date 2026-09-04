@@ -134,12 +134,12 @@ npx skills add miantiao-me/sink
 
 ## 🧰 MCP
 
-Sink serves a built-in MCP endpoint at `POST /mcp`, implementing the stateless [2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) revision of the Streamable HTTP transport while remaining compatible with older, initialization-based clients.
+Sink serves a built-in MCP endpoint at `POST /api/mcp`, implementing the stateless [2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) revision of the Streamable HTTP transport while remaining compatible with older, initialization-based clients.
 
 > Replace the domain below with your own instance, and use the `NUXT_SITE_TOKEN` from your instance's environment variables as the bearer token.
 
 ```sh
-claude mcp add --transport http sink https://sink.cool/mcp --header "Authorization: Bearer SinkCool"
+claude mcp add --transport http sink https://sink.cool/api/mcp --header "Authorization: Bearer SinkCool"
 ```
 
 Any client that supports an HTTP transport with custom headers can connect the same way:
@@ -149,7 +149,7 @@ Any client that supports an HTTP transport with custom headers can connect the s
   "mcpServers": {
     "sink": {
       "type": "http",
-      "url": "https://sink.cool/mcp",
+      "url": "https://sink.cool/api/mcp",
       "headers": {
         "Authorization": "Bearer SinkCool"
       }
