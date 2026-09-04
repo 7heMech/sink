@@ -1,25 +1,25 @@
 import type { H3Event } from 'h3'
-import type { JsonRpcId, JsonRpcRequest, McpResponse } from './protocol'
 import { createError, getHeader, getRequestHost, readRawBody, setResponseHeader } from 'h3'
-import {
-  isJsonRpcRequest,
-  jsonRpcError,
-  JsonRpcErrorCode,
-  jsonRpcResult,
-  LEGACY_PROTOCOL_VERSIONS,
-  MCP_PROTOCOL_VERSION,
-  MCP_SERVER_INFO,
-  META_SERVER_INFO,
-  readDeclaredProtocolVersion,
-  SUPPORTED_PROTOCOL_VERSIONS,
-  unsupportedProtocolVersion,
-  validateRequestHeaders,
-} from './protocol'
-import {
-  callMcpTool,
-  mcpTools,
-  mcpToolsByName,
-} from './tools'
+import { callMcpTool, mcpTools } from './tools'
+
+/**
+ * Protocol revision implemented by the stateless MCP endpoint.
+ * See https://modelcontextprotocol.io/specification/2026-07-28
+ */
+const MCP_PROTOCOL_VERSION = '2026-07-28'
+
+/**
+ * Initialization-based revisions this endpoint still answers so that clients
+ * predating the stateless revision keep working. Ordered newest first.
+ */
+const LEGACY_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'] as const
+
+const SUPPORTED_PROTOCOL_VERSIONS = [MCP_PROTOCOL_VERSION, ...LEGACY_PROTOCOL_VERSIONS]
+
+/** The version is this endpoint's, independent of the Sink release. */
+const SERVER_INFO = { name: 'sink', title: 'Sink', version: '1.0.0' }
+
+const SERVER_CAPABILITIES = { tools: { listChanged: false } }
 
 const INSTRUCTIONS = [
   'Sink is a link shortener with built-in analytics.',
@@ -28,39 +28,128 @@ const INSTRUCTIONS = [
   'The analytics tools read a sampled access log, so counts are estimates rather than exact totals.',
 ].join(' ')
 
-const SERVER_CAPABILITIES = {
-  tools: { listChanged: false },
-}
+const META_PROTOCOL_VERSION = 'io.modelcontextprotocol/protocolVersion'
+const META_CLIENT_CAPABILITIES = 'io.modelcontextprotocol/clientCapabilities'
+const META_SERVER_INFO = 'io.modelcontextprotocol/serverInfo'
 
 /**
- * Caching hints the stateless revision requires on every `server/discover` and
- * `tools/list` result. Both answers are compile-time constants that hold no
- * per-caller data, so they are public and only change when the app is
- * redeployed; an hour of client-side freshness costs nothing.
+ * `server/discover` and `tools/list` must carry caching hints. Both answers are
+ * compile-time constants holding no per-caller data, so they are public and
+ * only change when the app is redeployed.
  */
-const CACHE_HINTS = {
-  ttlMs: 3_600_000,
-  cacheScope: 'public',
-} as const
+const CACHE_HINTS = { ttlMs: 3_600_000, cacheScope: 'public' }
 
-function isLegacyVersion(version: string | undefined): boolean {
-  return LEGACY_PROTOCOL_VERSIONS.includes(version as typeof LEGACY_PROTOCOL_VERSIONS[number])
+/** `-32020` and above are allocated by MCP; the rest are standard JSON-RPC 2.0. */
+const ErrorCode = {
+  ParseError: -32700,
+  InvalidRequest: -32600,
+  MethodNotFound: -32601,
+  InvalidParams: -32602,
+  HeaderMismatch: -32020,
+  UnsupportedProtocolVersion: -32022,
 }
 
-/** Older clients negotiate at initialize; an unknown request falls back to the newest legacy revision. */
-function negotiateLegacyVersion(requested: unknown): string {
-  return typeof requested === 'string' && isLegacyVersion(requested) ? requested : LEGACY_PROTOCOL_VERSIONS[0]
+type JsonRpcId = string | number
+
+interface JsonRpcRequest {
+  jsonrpc: '2.0'
+  id?: JsonRpcId
+  method: string
+  params?: Record<string, unknown>
+}
+
+export interface McpResponse {
+  status: number
+  body: unknown
+}
+
+function result(id: JsonRpcId, value: Record<string, unknown>): McpResponse {
+  return { status: 200, body: { jsonrpc: '2.0', id, result: value } }
+}
+
+function fail(id: JsonRpcId | undefined, status: number, code: number, message: string, data?: unknown): McpResponse {
+  return {
+    status,
+    body: {
+      jsonrpc: '2.0',
+      ...(id === undefined ? {} : { id }),
+      error: { code, message, ...(data === undefined ? {} : { data }) },
+    },
+  }
+}
+
+function headerMismatch(id: JsonRpcId | undefined, message: string): McpResponse {
+  return fail(id, 400, ErrorCode.HeaderMismatch, `Header mismatch: ${message}`)
 }
 
 function methodNotFound(id: JsonRpcId | undefined, method: string): McpResponse {
-  return jsonRpcError(id, {
-    code: JsonRpcErrorCode.MethodNotFound,
-    message: `Method not found: ${method}`,
-  }, 404)
+  return fail(id, 404, ErrorCode.MethodNotFound, `Method not found: ${method}`)
 }
 
-function invalidParams(id: JsonRpcId | undefined, message: string): McpResponse {
-  return jsonRpcError(id, { code: JsonRpcErrorCode.InvalidParams, message }, 400)
+function isLegacyVersion(version: unknown): boolean {
+  return LEGACY_PROTOCOL_VERSIONS.includes(version as typeof LEGACY_PROTOCOL_VERSIONS[number])
+}
+
+function isJsonRpcRequest(value: unknown): value is JsonRpcRequest {
+  const message = value as Record<string, unknown> | null
+  if (!message || typeof message !== 'object' || Array.isArray(message))
+    return false
+  if (message.jsonrpc !== '2.0' || typeof message.method !== 'string')
+    return false
+
+  return message.id === undefined || typeof message.id === 'string' || typeof message.id === 'number'
+}
+
+/**
+ * `Mcp-Name` carries non-ASCII values as `=?base64?...?=`, and clients encode
+ * plain values that would otherwise look like the sentinel, so it is always
+ * decoded first. An undecodable value cannot match the body, so it is handed
+ * back unchanged and rejected as a mismatch instead of throwing.
+ */
+function decodeHeaderValue(value: string): string {
+  const encoded = value.match(/^=\?base64\?(.*)\?=$/)?.[1]
+  if (encoded === undefined)
+    return value
+
+  try {
+    return new TextDecoder().decode(Uint8Array.from(atob(encoded), character => character.charCodeAt(0)))
+  }
+  catch {
+    return value
+  }
+}
+
+/** A mirrored header has to be present and to agree with the body value it mirrors. */
+function matchHeader(event: H3Event, id: JsonRpcId | undefined, header: string, expected: unknown, decode = false): McpResponse | null {
+  const value = getHeader(event, header.toLowerCase())
+  if (!value)
+    return headerMismatch(id, `the ${header} header is required`)
+  if ((decode ? decodeHeaderValue(value) : value) === expected)
+    return null
+
+  return headerMismatch(id, `${header} header value '${value}' does not match body value '${String(expected)}'`)
+}
+
+function readMeta(request: JsonRpcRequest): Record<string, unknown> | undefined {
+  return request.params?._meta as Record<string, unknown> | undefined
+}
+
+/**
+ * Validates the `_meta` entries and mirrored headers the stateless revision
+ * requires. The body stays the source of truth, so any disagreement is rejected.
+ */
+function validateRequest(event: H3Event, request: JsonRpcRequest): McpResponse | null {
+  const { id, method, params } = request
+  const meta = readMeta(request)
+
+  for (const key of [META_PROTOCOL_VERSION, META_CLIENT_CAPABILITIES]) {
+    if (meta?.[key] === undefined)
+      return fail(id, 400, ErrorCode.InvalidParams, `params._meta['${key}'] is required`)
+  }
+
+  return matchHeader(event, id, 'MCP-Protocol-Version', meta?.[META_PROTOCOL_VERSION])
+    ?? matchHeader(event, id, 'Mcp-Method', method)
+    ?? (method === 'tools/call' ? matchHeader(event, id, 'Mcp-Name', params?.name, true) : null)
 }
 
 /** Tool arguments are an object or nothing; anything else is treated as no arguments. */
@@ -69,63 +158,62 @@ function toolArguments(params: JsonRpcRequest['params']): Record<string, unknown
   return args && typeof args === 'object' && !Array.isArray(args) ? args as Record<string, unknown> : {}
 }
 
+const advertisedTools = mcpTools.map(({ handler, ...tool }) => tool)
+
 /**
  * Single dispatch for both protocol eras. The stateless revision wraps every
  * result in `resultType` and server `_meta`, and every request carries its own
- * version, identity, and capabilities, so nothing is remembered between calls.
- * Initialization-based revisions answer the handshake without minting a
- * session, which those revisions permit, keeping the endpoint stateless.
+ * version and capabilities, so nothing is remembered between calls. Older
+ * revisions answer the handshake without minting a session, which they permit,
+ * so the endpoint stays stateless either way.
  */
 async function dispatch(event: H3Event, request: JsonRpcRequest, stateless: boolean): Promise<McpResponse> {
   const id = request.id as JsonRpcId
-  const complete = (result: Record<string, unknown> = {}) => jsonRpcResult(id, stateless
-    ? { resultType: 'complete', ...result, _meta: { [META_SERVER_INFO]: MCP_SERVER_INFO } }
-    : result)
-
-  // Only the stateless revision defines caching hints on its cacheable results.
+  const { method, params } = request
+  const complete = (value: Record<string, unknown> = {}) => result(id, stateless
+    ? { resultType: 'complete', ...value, _meta: { [META_SERVER_INFO]: SERVER_INFO } }
+    : value)
   const cacheHints = stateless ? CACHE_HINTS : {}
 
-  switch (request.method) {
-    case 'initialize':
-      return jsonRpcResult(id, {
-        protocolVersion: negotiateLegacyVersion(request.params?.protocolVersion),
+  switch (method) {
+    // `initialize` and `ping` went away with the sessions they served, so the
+    // stateless revision answers the 404 the transport mandates for them.
+    case 'initialize': {
+      if (stateless)
+        return methodNotFound(id, method)
+
+      // An unknown requested version falls back to the newest legacy revision.
+      const requested = params?.protocolVersion
+      return result(id, {
+        protocolVersion: isLegacyVersion(requested) ? requested : LEGACY_PROTOCOL_VERSIONS[0],
         capabilities: SERVER_CAPABILITIES,
-        serverInfo: MCP_SERVER_INFO,
+        serverInfo: SERVER_INFO,
         instructions: INSTRUCTIONS,
       })
+    }
+
+    case 'ping':
+      return stateless ? methodNotFound(id, method) : complete()
 
     case 'server/discover':
       return stateless
-        ? complete({
-            supportedVersions: SUPPORTED_PROTOCOL_VERSIONS,
-            capabilities: SERVER_CAPABILITIES,
-            instructions: INSTRUCTIONS,
-            ...cacheHints,
-          })
-        : methodNotFound(id, request.method)
+        ? complete({ supportedVersions: SUPPORTED_PROTOCOL_VERSIONS, capabilities: SERVER_CAPABILITIES, instructions: INSTRUCTIONS, ...cacheHints })
+        : methodNotFound(id, method)
 
     case 'tools/list':
-      return complete({ tools: mcpTools.map(({ handler, ...tool }) => tool), ...cacheHints })
+      return complete({ tools: advertisedTools, ...cacheHints })
 
     case 'tools/call': {
-      const name = request.params?.name
-      if (typeof name !== 'string')
-        return invalidParams(id, 'params.name is required')
-
-      const tool = mcpToolsByName.get(name)
+      const name = params?.name
+      const tool = mcpTools.find(candidate => candidate.name === name)
       if (!tool)
-        return invalidParams(id, `Unknown tool: ${name}`)
+        return fail(id, 400, ErrorCode.InvalidParams, `Unknown tool: ${String(name)}`)
 
-      return complete({ ...await callMcpTool(event, tool, toolArguments(request.params)) })
+      return complete({ ...await callMcpTool(event, tool, toolArguments(params)) })
     }
 
-    // `ping` went away with the session it kept alive, so the stateless
-    // revision answers the 404 the transport mandates for unknown methods.
-    case 'ping':
-      return stateless ? methodNotFound(id, request.method) : complete()
-
     default:
-      return methodNotFound(id, request.method)
+      return methodNotFound(id, method)
   }
 }
 
@@ -135,10 +223,7 @@ async function dispatch(event: H3Event, request: JsonRpcRequest, stateless: bool
  */
 export function rejectNonPostMethod(event: H3Event): never {
   setResponseHeader(event, 'Allow', 'POST')
-  throw createError({
-    status: 405,
-    statusText: 'Method Not Allowed',
-  })
+  throw createError({ status: 405, statusText: 'Method Not Allowed' })
 }
 
 /**
@@ -160,56 +245,42 @@ function isAllowedOrigin(event: H3Event): boolean {
 }
 
 export async function handleMcpPost(event: H3Event): Promise<McpResponse> {
-  if (!isAllowedOrigin(event)) {
-    return jsonRpcError(undefined, {
-      code: JsonRpcErrorCode.InvalidRequest,
-      message: 'Origin not allowed',
-    }, 403)
-  }
+  if (!isAllowedOrigin(event))
+    return fail(undefined, 403, ErrorCode.InvalidRequest, 'Origin not allowed')
 
   let message: unknown
   try {
     message = JSON.parse(await readRawBody(event) || '')
   }
   catch {
-    return jsonRpcError(undefined, {
-      code: JsonRpcErrorCode.ParseError,
-      message: 'Request body is not valid JSON',
-    }, 400)
+    return fail(undefined, 400, ErrorCode.ParseError, 'Request body is not valid JSON')
   }
 
-  if (Array.isArray(message)) {
-    return jsonRpcError(undefined, {
-      code: JsonRpcErrorCode.InvalidRequest,
-      message: 'Batched messages are not supported; send one JSON-RPC message per request',
-    }, 400)
-  }
+  if (Array.isArray(message))
+    return fail(undefined, 400, ErrorCode.InvalidRequest, 'Batched messages are not supported; send one JSON-RPC message per request')
 
-  if (!isJsonRpcRequest(message)) {
-    return jsonRpcError(undefined, {
-      code: JsonRpcErrorCode.InvalidRequest,
-      message: 'Request body must be a single JSON-RPC 2.0 request or notification',
-    }, 400)
-  }
-
-  const request = message
-  const declaredVersion = readDeclaredProtocolVersion(event, request)
+  if (!isJsonRpcRequest(message))
+    return fail(undefined, 400, ErrorCode.InvalidRequest, 'Request body must be a single JSON-RPC 2.0 request or notification')
 
   // Notifications carry no id and get no response body.
-  if (request.id === undefined) {
-    return request.method.startsWith('notifications/')
+  if (message.id === undefined) {
+    return message.method.startsWith('notifications/')
       ? { status: 202, body: null }
-      : jsonRpcError(undefined, {
-          code: JsonRpcErrorCode.InvalidRequest,
-          message: `Method ${request.method} must be sent as a request with an id`,
-        }, 400)
+      : fail(undefined, 400, ErrorCode.InvalidRequest, `Method ${message.method} must be sent as a request with an id`)
   }
 
-  if (declaredVersion === MCP_PROTOCOL_VERSION)
-    return validateRequestHeaders(event, request) ?? await dispatch(event, request, true)
+  // The declared version comes from `_meta` when present and the mirrored header otherwise.
+  const metaVersion = readMeta(message)?.[META_PROTOCOL_VERSION]
+  const version = typeof metaVersion === 'string' ? metaVersion : getHeader(event, 'mcp-protocol-version') || undefined
 
-  if (request.method === 'initialize' || declaredVersion === undefined || isLegacyVersion(declaredVersion))
-    return await dispatch(event, request, false)
+  if (version === MCP_PROTOCOL_VERSION)
+    return validateRequest(event, message) ?? await dispatch(event, message, true)
 
-  return unsupportedProtocolVersion(request.id, declaredVersion)
+  if (message.method === 'initialize' || version === undefined || isLegacyVersion(version))
+    return await dispatch(event, message, false)
+
+  return fail(message.id, 400, ErrorCode.UnsupportedProtocolVersion, 'Unsupported protocol version', {
+    supported: SUPPORTED_PROTOCOL_VERSIONS,
+    requested: version,
+  })
 }

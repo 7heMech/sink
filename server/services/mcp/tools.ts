@@ -1,5 +1,4 @@
 import type { H3Event } from 'h3'
-import type { EditLink, Link } from '#shared/schemas/link'
 import { createError } from 'h3'
 import { z } from 'zod'
 import {
@@ -22,47 +21,26 @@ import {
 } from '../../utils/analytics-queries'
 import { useWAE } from '../../utils/cloudflare'
 import { sanitizeLinkPassword, sanitizeLinksPassword } from '../../utils/link-password'
-import {
-  applyEditableLinkPassword,
-  assertLinkWritesAllowed,
-  buildLinkResponse,
-  detectUnsafeLink,
-  hashLinkPasswordForCreate,
-  mergeEditableLink,
-  prepareIncomingLink,
-} from '../../utils/link-processing'
-import {
-  countLinks,
-  createLink,
-  deleteLink,
-  getAnyAuthoritativeLink,
-  getAuthoritativeLink,
-  getLinkWithMetadata,
-  listLinks,
-  listTags,
-  normalizeSlug,
-  searchLinks,
-  updateLink,
-} from '../../utils/link-store'
+import { removeLink, replaceLink, saveNewLink, upsertLink } from '../../utils/link-processing'
+import { countLinks, getLinkWithMetadata, listLinks, listTags, normalizeSlug, searchLinks } from '../../utils/link-store'
 import { assertLinkStoreReady } from '../link-store/migration'
-
-export interface McpToolAnnotations {
-  readOnlyHint?: boolean
-  destructiveHint?: boolean
-  idempotentHint?: boolean
-  openWorldHint?: boolean
-}
 
 interface McpToolDefinition {
   name: string
   description: string
   inputSchema: Record<string, unknown>
-  annotations: McpToolAnnotations
+  annotations: Partial<Record<'readOnlyHint' | 'destructiveHint' | 'idempotentHint' | 'openWorldHint', boolean>>
   handler: (event: H3Event, args: Record<string, unknown>) => Promise<unknown>
 }
 
 export interface McpTool extends McpToolDefinition {
   title: string
+}
+
+export interface McpToolResult {
+  content: { type: 'text', text: string }[]
+  structuredContent?: unknown
+  isError?: boolean
 }
 
 /**
@@ -82,17 +60,15 @@ const AnalyticsFilterSchema = QuerySchema.omit({ limit: true })
 
 const FILTER_NOTE = 'Every filter accepts a comma-separated list of values.'
 
-const toolDefinitions: McpToolDefinition[] = [
+/** Tools reaching the link store, which the REST routes gate through middleware. */
+const linkTools: McpToolDefinition[] = [
   {
     name: 'list_links',
     description: 'List short links newest first, with cursor pagination. Use search_links when looking for a specific link.',
     inputSchema: inputSchema(ListLinksQuerySchema),
     annotations: { readOnlyHint: true },
     async handler(event, args) {
-      await assertLinkStoreReady(event)
-      const query = ListLinksQuerySchema.parse(args)
-
-      const list = await listLinks(event, query)
+      const list = await listLinks(event, ListLinksQuerySchema.parse(args))
       return { ...list, links: sanitizeLinksPassword(list.links) }
     },
   },
@@ -102,13 +78,8 @@ const toolDefinitions: McpToolDefinition[] = [
     inputSchema: inputSchema(SearchLinksQuerySchema),
     annotations: { readOnlyHint: true },
     async handler(event, args) {
-      await assertLinkStoreReady(event)
       const query = SearchLinksQuerySchema.parse(args)
-
-      if (!query.q && !query.url)
-        return { links: [] }
-
-      return { links: await searchLinks(event, query) }
+      return { links: query.q || query.url ? await searchLinks(event, query) : [] }
     },
   },
   {
@@ -117,7 +88,6 @@ const toolDefinitions: McpToolDefinition[] = [
     inputSchema: inputSchema(LinkSlugQuerySchema),
     annotations: { readOnlyHint: true },
     async handler(event, args) {
-      await assertLinkStoreReady(event)
       const { slug } = LinkSlugQuerySchema.parse(args)
       const { link, metadata } = await getLinkWithMetadata(event, normalizeSlug(event, slug))
       if (!link)
@@ -132,10 +102,7 @@ const toolDefinitions: McpToolDefinition[] = [
     inputSchema: inputSchema(LinkFilterQuerySchema),
     annotations: { readOnlyHint: true },
     async handler(event, args) {
-      await assertLinkStoreReady(event)
-      const query = LinkFilterQuerySchema.parse(args)
-
-      return { count: await countLinks(event, query) }
+      return { count: await countLinks(event, LinkFilterQuerySchema.parse(args)) }
     },
   },
   {
@@ -144,7 +111,6 @@ const toolDefinitions: McpToolDefinition[] = [
     inputSchema: inputSchema(z.object({})),
     annotations: { readOnlyHint: true },
     async handler(event) {
-      await assertLinkStoreReady(event)
       return { tags: await listTags(event) }
     },
   },
@@ -154,16 +120,7 @@ const toolDefinitions: McpToolDefinition[] = [
     inputSchema: inputSchema(CreateLinkArgsSchema),
     annotations: { destructiveHint: false, idempotentHint: false },
     async handler(event, args) {
-      await assertLinkStoreReady(event)
-      const link = CreateLinkSchema.parse(args)
-
-      await prepareIncomingLink(event, link)
-      await hashLinkPasswordForCreate(link)
-
-      if (!await createLink(event, link))
-        throw createError({ status: 409, statusText: 'Link already exists' })
-
-      return buildLinkResponse(event, link)
+      return saveNewLink(event, CreateLinkSchema.parse(args))
     },
   },
   {
@@ -172,26 +129,7 @@ const toolDefinitions: McpToolDefinition[] = [
     inputSchema: inputSchema(LinkFieldsSchema),
     annotations: { destructiveHint: true, idempotentHint: true },
     async handler(event, args) {
-      assertLinkWritesAllowed(event, 'edit')
-      await assertLinkStoreReady(event)
-
-      const link: EditLink = EditLinkSchema.parse(args)
-      link.slug = normalizeSlug(event, link.slug)
-
-      const existingLink: Link | null = await getAnyAuthoritativeLink(event, link.slug)
-      if (!existingLink)
-        throw createError({ status: 404, statusText: 'Link not found' })
-
-      if (link.url !== existingLink.url)
-        await detectUnsafeLink(event, link)
-
-      const newLink = mergeEditableLink(existingLink, link)
-      await applyEditableLinkPassword(newLink, link.password)
-
-      if (!await updateLink(event, newLink, { id: existingLink.id, updatedAt: existingLink.updatedAt }))
-        throw createError({ status: 409, statusText: 'Link was modified or replaced' })
-
-      return buildLinkResponse(event, newLink)
+      return replaceLink(event, EditLinkSchema.parse(args))
     },
   },
   {
@@ -200,26 +138,7 @@ const toolDefinitions: McpToolDefinition[] = [
     inputSchema: inputSchema(CreateLinkArgsSchema),
     annotations: { destructiveHint: false, idempotentHint: true },
     async handler(event, args) {
-      await assertLinkStoreReady(event)
-      const link = CreateLinkSchema.parse(args)
-
-      await prepareIncomingLink(event, link)
-
-      const existingLink = await getAuthoritativeLink(event, link.slug)
-      if (existingLink)
-        return { ...buildLinkResponse(event, existingLink), status: 'existing' }
-
-      await hashLinkPasswordForCreate(link)
-
-      if (!await createLink(event, link)) {
-        const racedLink = await getAuthoritativeLink(event, link.slug)
-        if (racedLink)
-          return { ...buildLinkResponse(event, racedLink), status: 'existing' }
-
-        throw createError({ status: 409, statusText: 'Link already exists' })
-      }
-
-      return { ...buildLinkResponse(event, link), status: 'created' }
+      return upsertLink(event, CreateLinkSchema.parse(args))
     },
   },
   {
@@ -228,23 +147,21 @@ const toolDefinitions: McpToolDefinition[] = [
     inputSchema: inputSchema(DeleteLinkSchema),
     annotations: { destructiveHint: true, idempotentHint: true },
     async handler(event, args) {
-      assertLinkWritesAllowed(event, 'delete')
-      await assertLinkStoreReady(event)
-
-      const parsed = DeleteLinkSchema.parse(args)
-      const slug = normalizeSlug(event, parsed.slug)
-      await deleteLink(event, slug)
+      const { slug } = DeleteLinkSchema.parse(args)
+      await removeLink(event, slug)
       return { slug, deleted: true }
     },
   },
+]
+
+const analyticsTools: McpToolDefinition[] = [
   {
     name: 'get_analytics_counters',
     description: `Total visits, unique visitors, and referer counts over the access log. ${FILTER_NOTE}`,
     inputSchema: inputSchema(AnalyticsFilterSchema),
     annotations: { readOnlyHint: true },
     async handler(event, args) {
-      const query = QuerySchema.parse(args)
-      return await useWAE(event, buildCountersQuery(query, event))
+      return useWAE(event, buildCountersQuery(QuerySchema.parse(args), event))
     },
   },
   {
@@ -253,8 +170,7 @@ const toolDefinitions: McpToolDefinition[] = [
     inputSchema: inputSchema(ViewsQuerySchema.omit({ limit: true })),
     annotations: { readOnlyHint: true },
     async handler(event, args) {
-      const query = ViewsQuerySchema.parse(args)
-      return await useWAE(event, buildViewsQuery(query, event))
+      return useWAE(event, buildViewsQuery(ViewsQuerySchema.parse(args), event))
     },
   },
   {
@@ -263,8 +179,7 @@ const toolDefinitions: McpToolDefinition[] = [
     inputSchema: inputSchema(MetricsQuerySchema),
     annotations: { readOnlyHint: true },
     async handler(event, args) {
-      const query = MetricsQuerySchema.parse(args)
-      return await useWAE(event, buildMetricsQuery(query, event))
+      return useWAE(event, buildMetricsQuery(MetricsQuerySchema.parse(args), event))
     },
   },
 ]
@@ -273,26 +188,13 @@ const toolDefinitions: McpToolDefinition[] = [
  * Titles are the display form of the name (`list_links` becomes `List links`),
  * and annotations fall back to the hints every Sink tool shares.
  */
-export const mcpTools: McpTool[] = toolDefinitions.map(tool => ({
+export const mcpTools: McpTool[] = [...linkTools, ...analyticsTools].map(tool => ({
   ...tool,
   title: tool.name.replace(/_/g, ' ').replace(/^./, character => character.toUpperCase()),
   annotations: { readOnlyHint: false, openWorldHint: false, ...tool.annotations },
 }))
 
-export const mcpToolsByName = new Map(mcpTools.map(tool => [tool.name, tool]))
-
-export interface McpToolResult {
-  content: { type: 'text', text: string }[]
-  structuredContent?: unknown
-  isError?: boolean
-}
-
-function toolError(message: string): McpToolResult {
-  return {
-    content: [{ type: 'text', text: message }],
-    isError: true,
-  }
-}
+const gatedTools = new Set(linkTools.map(tool => tool.name))
 
 /**
  * Runs a tool and shapes the outcome as a tool result. Validation and business
@@ -301,6 +203,9 @@ function toolError(message: string): McpToolResult {
  */
 export async function callMcpTool(event: H3Event, tool: McpTool, args: Record<string, unknown>): Promise<McpToolResult> {
   try {
+    if (gatedTools.has(tool.name))
+      await assertLinkStoreReady(event)
+
     const data = await tool.handler(event, args)
     return {
       content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
@@ -308,13 +213,11 @@ export async function callMcpTool(event: H3Event, tool: McpTool, args: Record<st
     }
   }
   catch (error) {
-    if (error instanceof z.ZodError) {
-      const issues = error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')
-      return toolError(`Invalid arguments for ${tool.name}: ${issues}`)
-    }
-
     const failure = error as { statusCode?: number, statusMessage?: string, message?: string }
-    const status = failure.statusCode ? `${failure.statusCode} ` : ''
-    return toolError(`${tool.name} failed: ${status}${failure.statusMessage || failure.message || 'Unknown error'}`)
+    const text = error instanceof z.ZodError
+      ? `Invalid arguments for ${tool.name}: ${error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`
+      : `${tool.name} failed: ${failure.statusCode ? `${failure.statusCode} ` : ''}${failure.statusMessage || failure.message || 'Unknown error'}`
+
+    return { content: [{ type: 'text', text }], isError: true }
   }
 }

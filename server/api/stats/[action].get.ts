@@ -1,4 +1,3 @@
-import type { z } from 'zod'
 import { generateCsv } from '#shared/utils/csv'
 import { createExportFilename } from '#shared/utils/export-file'
 
@@ -21,7 +20,7 @@ export default eventHandler(async (event) => {
     throw createError({ status: 404, statusText: 'Not Found' })
   }
 
-  const query: z.infer<typeof StatsExportQuerySchema> = await getValidatedQuery(event, StatsExportQuerySchema.parse)
+  const query = await getValidatedQuery(event, StatsExportQuerySchema.parse)
   const result = await useWAE(event, buildAccessExportQuery(query, event)) as { data?: AccessExportRow[] }
   const csv = toCsv(result.data ?? [])
 

@@ -1,19 +1,11 @@
-import type { H3Event } from 'h3'
 import { timingSafeEqual } from 'node:crypto'
 
-/**
- * The MCP endpoint is authenticated exactly like the REST API. Matching runs on
- * the parsed pathname with trailing slashes removed, because the router treats
- * `/mcp/` as `/mcp` and a raw string comparison would let that form through
- * unauthenticated.
- */
-function isProtectedPath(event: H3Event): boolean {
-  const pathname = getRequestURL(event).pathname.replace(/\/+$/, '')
-  return pathname.startsWith('/api/') || pathname === '/mcp'
-}
-
 export default eventHandler(async (event) => {
-  if (!isProtectedPath(event))
+  // The MCP endpoint authenticates exactly like the REST API. Trailing slashes
+  // are stripped because the router treats `/mcp/` as `/mcp`, and a raw path
+  // comparison would let that form through unauthenticated.
+  const pathname = getRequestURL(event).pathname.replace(/\/+$/, '')
+  if (!pathname.startsWith('/api/') && pathname !== '/mcp')
     return
 
   const token = getHeader(event, 'Authorization')?.replace(/^Bearer\s+/, '')
