@@ -36,6 +36,7 @@ defineRouteMeta({
 })
 
 export default eventHandler(async (event) => {
+  assertLinkWritesAllowed(event, 'edit')
   const link = await readValidatedBody(event, EditLinkSchema.parse)
   const response = await replaceLink(event, link)
 

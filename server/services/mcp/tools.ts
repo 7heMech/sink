@@ -207,8 +207,10 @@ export async function callMcpTool(event: H3Event, tool: McpTool, args: Record<st
       await assertLinkStoreReady(event)
 
     const data = await tool.handler(event, args)
+    // The payload also ships as `structuredContent`, so the text block stays
+    // compact; it exists for clients that predate structured results.
     return {
-      content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+      content: [{ type: 'text', text: JSON.stringify(data) }],
       structuredContent: data,
     }
   }

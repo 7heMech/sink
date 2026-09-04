@@ -21,8 +21,12 @@ export interface LinkResponse {
   shortLink: string
 }
 
-/** Preview instances accept reads but reject link mutations. */
-function assertLinkWritesAllowed(event: H3Event, action: string): void {
+/**
+ * Preview instances accept reads but reject link mutations. The write
+ * operations below enforce it, and the REST routes call it again up front so a
+ * preview instance answers 403 without first validating the request body.
+ */
+export function assertLinkWritesAllowed(event: H3Event, action: string): void {
   if (useRuntimeConfig(event).public.previewMode) {
     throw createError({
       status: 403,

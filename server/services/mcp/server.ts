@@ -1,20 +1,14 @@
 import type { H3Event } from 'h3'
-import { createError, getHeader, getRequestHost, readRawBody, setResponseHeader } from 'h3'
+import { getHeader, getRequestHost, readRawBody } from 'h3'
 import { callMcpTool, mcpTools } from './tools'
 
 /**
- * Protocol revision implemented by the stateless MCP endpoint.
- * See https://modelcontextprotocol.io/specification/2026-07-28
+ * Newest first: the stateless revision this endpoint implements
+ * (https://modelcontextprotocol.io/specification/2026-07-28), then the
+ * initialization-based revisions it still answers so that older clients work.
  */
-const MCP_PROTOCOL_VERSION = '2026-07-28'
-
-/**
- * Initialization-based revisions this endpoint still answers so that clients
- * predating the stateless revision keep working. Ordered newest first.
- */
-const LEGACY_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'] as const
-
-const SUPPORTED_PROTOCOL_VERSIONS = [MCP_PROTOCOL_VERSION, ...LEGACY_PROTOCOL_VERSIONS]
+const SUPPORTED_PROTOCOL_VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26'] as const
+const [MCP_PROTOCOL_VERSION, ...LEGACY_PROTOCOL_VERSIONS] = SUPPORTED_PROTOCOL_VERSIONS
 
 /** The version is this endpoint's, independent of the Sink release. */
 const SERVER_INFO = { name: 'sink', title: 'Sink', version: '1.0.0' }
@@ -215,15 +209,6 @@ async function dispatch(event: H3Event, request: JsonRpcRequest, stateless: bool
     default:
       return methodNotFound(id, method)
   }
-}
-
-/**
- * The 2026-07-28 revision removed the standalone GET stream and protocol-level
- * sessions, so POST is the only method this endpoint answers.
- */
-export function rejectNonPostMethod(event: H3Event): never {
-  setResponseHeader(event, 'Allow', 'POST')
-  throw createError({ status: 405, statusText: 'Method Not Allowed' })
 }
 
 /**

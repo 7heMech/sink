@@ -108,42 +108,20 @@ describe('/mcp transport', () => {
     expect(await response.text()).toBe('')
   })
 
-  it('rejects malformed JSON with a parse error', async () => {
-    const response = await fetchWithAuth('/mcp', {
-      method: 'POST',
-      body: '{ not json',
-      headers: { 'Content-Type': 'application/json' },
-    })
-    expect(response.status).toBe(400)
-    expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(-32700)
-  })
-
-  it('rejects batched messages', async () => {
-    const response = await postMcp([modernBody(1, 'tools/list')], modernHeaders('tools/list'))
-    expect(response.status).toBe(400)
-    expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(-32600)
-  })
-
-  const headerMismatches: [string, () => Promise<Response>][] = [
-    ['Mcp-Method disagrees with the body', () => postModern(1, 'tools/list', {}, { 'Mcp-Method': 'tools/call' })],
-    ['Mcp-Name disagrees with the body', () => postModern(1, 'tools/call', { name: 'list_tags', arguments: {} }, { 'Mcp-Name': 'list_links' })],
-    ['Mcp-Name carries a malformed base64 sentinel', () => postModern(1, 'tools/call', { name: 'list_tags', arguments: {} }, { 'Mcp-Name': '=?base64?not valid base64!!?=' })],
-    ['the MCP-Protocol-Version header is absent', () => postMcp(modernBody(1, 'tools/list'), { 'Content-Type': 'application/json', 'Mcp-Method': 'tools/list' })],
+  const rejected: [string, () => Promise<Response>, number][] = [
+    ['the body is malformed JSON', () => fetchWithAuth('/mcp', { method: 'POST', body: '{ not json', headers: { 'Content-Type': 'application/json' } }), -32700],
+    ['messages are batched', () => postMcp([modernBody(1, 'tools/list')], modernHeaders('tools/list')), -32600],
+    ['Mcp-Method disagrees with the body', () => postModern(1, 'tools/list', {}, { 'Mcp-Method': 'tools/call' }), -32020],
+    ['Mcp-Name disagrees with the body', () => postModern(1, 'tools/call', { name: 'list_tags', arguments: {} }, { 'Mcp-Name': 'list_links' }), -32020],
+    ['Mcp-Name carries a malformed base64 sentinel', () => postModern(1, 'tools/call', { name: 'list_tags', arguments: {} }, { 'Mcp-Name': '=?base64?not valid base64!!?=' }), -32020],
+    ['the MCP-Protocol-Version header is absent', () => postMcp(modernBody(1, 'tools/list'), { 'Content-Type': 'application/json', 'Mcp-Method': 'tools/list' }), -32020],
+    ['the client capabilities _meta entry is absent', () => postMcp({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: { _meta: { [META_VERSION]: MODERN_VERSION } } }, modernHeaders('tools/list')), -32602],
   ]
 
-  it.each(headerMismatches)('rejects a request where %s', async (_label, send) => {
+  it.each(rejected)('rejects a request where %s', async (_label, send, code) => {
     const response = await send()
     expect(response.status).toBe(400)
-    expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(-32020)
-  })
-
-  it('requires the client capabilities _meta entry', async () => {
-    const response = await postMcp(
-      { jsonrpc: '2.0', id: 1, method: 'tools/list', params: { _meta: { [META_VERSION]: MODERN_VERSION } } },
-      modernHeaders('tools/list'),
-    )
-    expect(response.status).toBe(400)
-    expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(-32602)
+    expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(code)
   })
 
   it('reports supported versions for an unknown protocol version', async () => {
@@ -158,13 +136,8 @@ describe('/mcp transport', () => {
     expect(payload.error?.data.supported).toContain(MODERN_VERSION)
   })
 
-  it('returns 404 with a JSON-RPC error for unknown methods', async () => {
-    const response = await postModern(1, 'resources/list')
-    expect(response.status).toBe(404)
-    expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(-32601)
-  })
-
-  it.each(['ping', 'initialize'])('returns 404 for %s, which this revision removed', async (method) => {
+  // `resources/list` was never served; `ping` and `initialize` this revision removed.
+  it.each(['resources/list', 'ping', 'initialize'])('returns 404 with a JSON-RPC error for %s', async (method) => {
     const response = await postModern(1, method)
     expect(response.status).toBe(404)
     expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(-32601)
@@ -228,17 +201,15 @@ describe('/mcp tools', () => {
     expect(read.payload.result?.isError).toBe(true)
   })
 
-  it('reports business failures as tool errors, not protocol errors', async () => {
-    const { response, payload } = await callTool('get_link', { slug: `missing-${crypto.randomUUID()}` })
+  // Business and validation failures stay inside a 200 tool result so the model can self-correct.
+  it.each([
+    ['business failures', 'get_link', { slug: `missing-${crypto.randomUUID()}` }, '404'],
+    ['invalid arguments', 'create_link', { url: 'not-a-url' }, 'Invalid arguments'],
+  ] as const)('reports %s as tool errors, not protocol errors', async (_label, tool, args, text) => {
+    const { response, payload } = await callTool(tool, args)
     expect(response.status).toBe(200)
     expect(payload.result?.isError).toBe(true)
-    expect(payload.result?.content[0].text).toContain('404')
-  })
-
-  it('reports invalid arguments as tool errors', async () => {
-    const { payload } = await callTool('create_link', { url: 'not-a-url' })
-    expect(payload.result?.isError).toBe(true)
-    expect(payload.result?.content[0].text).toContain('Invalid arguments')
+    expect(payload.result?.content[0].text).toContain(text)
   })
 
   it('returns search matches under an object key', async () => {
@@ -305,23 +276,8 @@ describe('/mcp backward compatibility', () => {
 describe('/mcp path normalization', () => {
   // The router resolves these to the same handler, so authentication has to
   // match the normalized pathname rather than the raw request path.
-  it.each(['/mcp/', '/mcp//'])('rejects unauthenticated requests to %s', async (path) => {
-    const response = await postMcp(
-      modernBody(1, 'tools/call', { name: 'list_tags', arguments: {} }),
-      modernHeaders('tools/call', 'list_tags'),
-      false,
-      path,
-    )
-    expect(response.status).toBe(401)
-  })
-
-  it('still serves the trailing-slash path when authenticated', async () => {
-    const response = await postMcp(
-      modernBody(1, 'tools/list'),
-      modernHeaders('tools/list'),
-      true,
-      '/mcp/',
-    )
-    expect(response.status).toBe(200)
+  it.each([['/mcp/', false, 401], ['/mcp//', false, 401], ['/mcp/', true, 200]] as const)('answers %s with auth=%s as %i', async (path, withAuth, status) => {
+    const response = await postMcp(modernBody(1, 'tools/list'), modernHeaders('tools/list'), withAuth, path)
+    expect(response.status).toBe(status)
   })
 })

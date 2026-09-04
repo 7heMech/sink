@@ -35,15 +35,10 @@ export const HeatmapQuerySchema = QuerySchema.extend({
   clientTimezone: ClientTimezoneSchema,
 })
 
-export const StatsExportQuerySchema = QuerySchema.superRefine((query, ctx) => {
-  if (query.startAt !== undefined && query.endAt !== undefined && query.startAt > query.endAt) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'startAt must be less than or equal to endAt',
-      path: ['startAt'],
-    })
-  }
-})
+export const StatsExportQuerySchema = QuerySchema.refine(
+  query => query.startAt === undefined || query.endAt === undefined || query.startAt <= query.endAt,
+  { message: 'startAt must be less than or equal to endAt', path: ['startAt'] },
+)
 
 export type ViewsQuery = z.infer<typeof ViewsQuerySchema>
 export type MetricsQuery = z.infer<typeof MetricsQuerySchema>

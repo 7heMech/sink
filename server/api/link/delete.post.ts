@@ -22,6 +22,7 @@ defineRouteMeta({
 })
 
 export default eventHandler(async (event) => {
+  assertLinkWritesAllowed(event, 'delete')
   const { slug } = await readValidatedBody(event, DeleteLinkSchema.parse)
   await removeLink(event, slug)
 })
