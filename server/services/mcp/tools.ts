@@ -1,3 +1,4 @@
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { H3Event } from 'h3'
 import { createError } from 'h3'
 import { z } from 'zod'
@@ -28,7 +29,8 @@ import { assertLinkStoreReady } from '../link-store/migration'
 interface McpToolDefinition {
   name: string
   description: string
-  inputSchema: Record<string, unknown>
+  /** The zod contract the handler parses with; the SDK advertises it directly so the shape cannot drift. */
+  argsSchema: z.ZodType
   annotations: Partial<Record<'readOnlyHint' | 'destructiveHint' | 'idempotentHint' | 'openWorldHint', boolean>>
   handler: (event: H3Event, args: Record<string, unknown>) => Promise<unknown>
 }
@@ -41,15 +43,6 @@ export interface McpToolResult {
   content: { type: 'text', text: string }[]
   structuredContent?: unknown
   isError?: boolean
-}
-
-/**
- * Tool input schemas are generated from the same zod contracts the handlers
- * parse with, so the advertised shape cannot drift from what is accepted.
- */
-function inputSchema(schema: z.ZodType): Record<string, unknown> {
-  const { $schema, ...json } = z.toJSONSchema(schema, { io: 'input', unrepresentable: 'any' })
-  return { ...json, additionalProperties: false }
 }
 
 /** Create and upsert generate a slug when one is omitted; the other write fields match the edit contract. */
@@ -65,7 +58,7 @@ const linkTools: McpToolDefinition[] = [
   {
     name: 'list_links',
     description: 'List short links newest first, with cursor pagination. Use search_links when looking for a specific link.',
-    inputSchema: inputSchema(ListLinksQuerySchema),
+    argsSchema: ListLinksQuerySchema,
     annotations: { readOnlyHint: true },
     async handler(event, args) {
       const list = await listLinks(event, ListLinksQuerySchema.parse(args))
@@ -75,7 +68,7 @@ const linkTools: McpToolDefinition[] = [
   {
     name: 'search_links',
     description: 'Search links by keyword or exact destination URL. One of `q` or `url` is required; without either the result is empty.',
-    inputSchema: inputSchema(SearchLinksQuerySchema),
+    argsSchema: SearchLinksQuerySchema,
     annotations: { readOnlyHint: true },
     async handler(event, args) {
       const query = SearchLinksQuerySchema.parse(args)
@@ -85,7 +78,7 @@ const linkTools: McpToolDefinition[] = [
   {
     name: 'get_link',
     description: 'Read a single short link by slug, including its stored metadata.',
-    inputSchema: inputSchema(LinkSlugQuerySchema),
+    argsSchema: LinkSlugQuerySchema,
     annotations: { readOnlyHint: true },
     async handler(event, args) {
       const { slug } = LinkSlugQuerySchema.parse(args)
@@ -99,7 +92,7 @@ const linkTools: McpToolDefinition[] = [
   {
     name: 'count_links',
     description: 'Count links matching an optional keyword, URL, tag, or expiration status.',
-    inputSchema: inputSchema(LinkFilterQuerySchema),
+    argsSchema: LinkFilterQuerySchema,
     annotations: { readOnlyHint: true },
     async handler(event, args) {
       return { count: await countLinks(event, LinkFilterQuerySchema.parse(args)) }
@@ -108,7 +101,7 @@ const linkTools: McpToolDefinition[] = [
   {
     name: 'list_tags',
     description: 'List every tag currently in use, with the number of links carrying it.',
-    inputSchema: inputSchema(z.object({})),
+    argsSchema: z.object({}),
     annotations: { readOnlyHint: true },
     async handler(event) {
       return { tags: await listTags(event) }
@@ -117,7 +110,7 @@ const linkTools: McpToolDefinition[] = [
   {
     name: 'create_link',
     description: 'Create a short link. Fails when the slug is already taken; use upsert_link to reuse an existing link instead.',
-    inputSchema: inputSchema(CreateLinkArgsSchema),
+    argsSchema: CreateLinkArgsSchema,
     annotations: { destructiveHint: false, idempotentHint: false },
     async handler(event, args) {
       return saveNewLink(event, CreateLinkSchema.parse(args))
@@ -126,7 +119,7 @@ const linkTools: McpToolDefinition[] = [
   {
     name: 'update_link',
     description: 'Replace an existing link identified by slug. Every writable field is overwritten and any omitted optional field is cleared, so read the link with get_link first and send it back complete.',
-    inputSchema: inputSchema(LinkFieldsSchema),
+    argsSchema: LinkFieldsSchema,
     annotations: { destructiveHint: true, idempotentHint: true },
     async handler(event, args) {
       return replaceLink(event, EditLinkSchema.parse(args))
@@ -135,7 +128,7 @@ const linkTools: McpToolDefinition[] = [
   {
     name: 'upsert_link',
     description: 'Return the existing link for a slug, or create it when absent. The result reports whether it was `created` or `existing`.',
-    inputSchema: inputSchema(CreateLinkArgsSchema),
+    argsSchema: CreateLinkArgsSchema,
     annotations: { destructiveHint: false, idempotentHint: true },
     async handler(event, args) {
       return upsertLink(event, CreateLinkSchema.parse(args))
@@ -144,7 +137,7 @@ const linkTools: McpToolDefinition[] = [
   {
     name: 'delete_link',
     description: 'Permanently delete a short link. Existing traffic to the slug stops resolving immediately.',
-    inputSchema: inputSchema(DeleteLinkSchema),
+    argsSchema: DeleteLinkSchema,
     annotations: { destructiveHint: true, idempotentHint: true },
     async handler(event, args) {
       const { slug } = DeleteLinkSchema.parse(args)
@@ -158,7 +151,7 @@ const analyticsTools: McpToolDefinition[] = [
   {
     name: 'get_analytics_counters',
     description: `Total visits, unique visitors, and referer counts over the access log. ${FILTER_NOTE}`,
-    inputSchema: inputSchema(AnalyticsFilterSchema),
+    argsSchema: AnalyticsFilterSchema,
     annotations: { readOnlyHint: true },
     async handler(event, args) {
       return useWAE(event, buildCountersQuery(QuerySchema.parse(args), event))
@@ -167,7 +160,7 @@ const analyticsTools: McpToolDefinition[] = [
   {
     name: 'get_analytics_views',
     description: `Visits and visitors bucketed over time by minute, hour, or day. ${FILTER_NOTE}`,
-    inputSchema: inputSchema(ViewsQuerySchema.omit({ limit: true })),
+    argsSchema: ViewsQuerySchema.omit({ limit: true }),
     annotations: { readOnlyHint: true },
     async handler(event, args) {
       return useWAE(event, buildViewsQuery(ViewsQuerySchema.parse(args), event))
@@ -176,7 +169,7 @@ const analyticsTools: McpToolDefinition[] = [
   {
     name: 'get_analytics_metrics',
     description: `Top values for one access-log dimension, ordered by visits. ${FILTER_NOTE}`,
-    inputSchema: inputSchema(MetricsQuerySchema),
+    argsSchema: MetricsQuerySchema,
     annotations: { readOnlyHint: true },
     async handler(event, args) {
       return useWAE(event, buildMetricsQuery(MetricsQuerySchema.parse(args), event))
@@ -198,8 +191,9 @@ const gatedTools = new Set(linkTools.map(tool => tool.name))
 
 /**
  * Runs a tool and shapes the outcome as a tool result. Validation and business
- * failures are returned with `isError` so the calling model can self-correct;
- * only unknown tools are reported as JSON-RPC protocol errors by the caller.
+ * failures are returned with `isError` so the calling model can self-correct.
+ * The SDK validates arguments before the callback runs and converts unknown
+ * tools to `isError` results itself, so only tool-level failures are shaped here.
  */
 export async function callMcpTool(event: H3Event, tool: McpTool, args: Record<string, unknown>): Promise<McpToolResult> {
   try {
@@ -221,5 +215,24 @@ export async function callMcpTool(event: H3Event, tool: McpTool, args: Record<st
       : `${tool.name} failed: ${failure.statusCode ? `${failure.statusCode} ` : ''}${failure.statusMessage || failure.message || 'Unknown error'}`
 
     return { content: [{ type: 'text', text }], isError: true }
+  }
+}
+
+/**
+ * Registers the thirteen curated Sink tools on an SDK `McpServer`. The server
+ * is created per request so each tool closes over its own `H3Event`; the SDK
+ * advertises the zod contracts directly and validates arguments before the
+ * callback runs.
+ */
+export function registerMcpTools(server: McpServer, event: H3Event): void {
+  for (const tool of mcpTools) {
+    server.registerTool(tool.name, {
+      title: tool.title,
+      description: tool.description,
+      inputSchema: tool.argsSchema as any,
+      annotations: tool.annotations,
+    }, async (args: any) => {
+      return await callMcpTool(event, tool, (args ?? {}) as Record<string, unknown>) as any
+    })
   }
 }

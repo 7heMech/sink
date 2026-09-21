@@ -2,10 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { deleteStoredLinks, fetch, fetchWithAuth, setLinkStoreD1Mode } from '../utils'
 
 const MCP_PATH = '/api/mcp'
-const MODERN_VERSION = '2026-07-28'
-const LEGACY_VERSION = '2025-11-25'
-const META_VERSION = 'io.modelcontextprotocol/protocolVersion'
-const META_CAPABILITIES = 'io.modelcontextprotocol/clientCapabilities'
+const PROTOCOL_VERSION = '2025-11-25'
+const LEGACY_VERSIONS = ['2025-03-26', '2024-11-05']
 
 const createdSlugs = new Set<string>()
 
@@ -20,33 +18,16 @@ afterEach(async () => {
 
 interface JsonRpcEnvelope {
   jsonrpc: string
-  id?: string | number
+  id?: string | number | null
   result?: Record<string, any>
   error?: { code: number, message: string, data?: any }
 }
 
-function modernBody(id: string | number, method: string, params: Record<string, unknown> = {}) {
-  return {
-    jsonrpc: '2.0',
-    id,
-    method,
-    params: {
-      ...params,
-      _meta: {
-        [META_VERSION]: MODERN_VERSION,
-        [META_CAPABILITIES]: {},
-      },
-    },
-  }
-}
-
-function modernHeaders(method: string, name?: string) {
+function baseHeaders(extra: Record<string, string> = {}) {
   return {
     'Content-Type': 'application/json',
     'Accept': 'application/json, text/event-stream',
-    'MCP-Protocol-Version': MODERN_VERSION,
-    'Mcp-Method': method,
-    ...(name ? { 'Mcp-Name': name } : {}),
+    ...extra,
   }
 }
 
@@ -55,17 +36,28 @@ function postMcp(body: unknown, headers: Record<string, string>, withAuth = true
   return request(path, { method: 'POST', body: JSON.stringify(body), headers })
 }
 
-function postModern(id: string | number, method: string, params: Record<string, unknown> = {}, headerOverrides: Record<string, string> = {}) {
-  const toolName = method === 'tools/call' ? params.name as string : undefined
-  return postMcp(modernBody(id, method, params), { ...modernHeaders(method, toolName), ...headerOverrides })
+function postRpc(id: string | number, method: string, params: Record<string, unknown> = {}, headers: Record<string, string> = {}) {
+  return postMcp({ jsonrpc: '2.0', id, method, params }, baseHeaders({ 'Mcp-Protocol-Version': PROTOCOL_VERSION, ...headers }))
 }
 
-function postLegacy(id: string | number, method: string, params: Record<string, unknown> = {}) {
-  return postMcp({ jsonrpc: '2.0', id, method, params }, { 'Content-Type': 'application/json' })
+function postInitialize(id: string | number, protocolVersion = PROTOCOL_VERSION) {
+  return postMcp(
+    {
+      jsonrpc: '2.0',
+      id,
+      method: 'initialize',
+      params: {
+        protocolVersion,
+        capabilities: {},
+        clientInfo: { name: 'test-client', version: '1.0.0' },
+      },
+    },
+    baseHeaders(),
+  )
 }
 
 async function callTool(name: string, args: Record<string, unknown>) {
-  const response = await postModern(`call-${name}`, 'tools/call', { name, arguments: args })
+  const response = await postRpc(`call-${name}-${crypto.randomUUID()}`, 'tools/call', { name, arguments: args })
   const payload = await response.json() as JsonRpcEnvelope
   return { response, payload }
 }
@@ -77,16 +69,16 @@ function trackSlug(slug: string) {
 
 describe('/api/mcp authentication', () => {
   it('rejects unauthenticated requests', async () => {
-    const response = await postMcp(modernBody(1, 'tools/list'), modernHeaders('tools/list'), false)
+    const response = await postMcp({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, baseHeaders(), false)
     expect(response.status).toBe(401)
     expect(response.headers.get('WWW-Authenticate')).toBe('Bearer')
   })
 
   it('rejects cross-origin browser requests', async () => {
-    const response = await postMcp(modernBody(1, 'tools/list'), {
-      ...modernHeaders('tools/list'),
-      Origin: 'https://attacker.example',
-    })
+    const response = await postMcp(
+      { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
+      { ...baseHeaders(), Origin: 'https://attacker.example' },
+    )
     expect(response.status).toBe(403)
   })
 })
@@ -103,70 +95,87 @@ describe('/api/mcp transport', () => {
   it('answers notifications with 202 and no body', async () => {
     const response = await postMcp(
       { jsonrpc: '2.0', method: 'notifications/initialized' },
-      { 'Content-Type': 'application/json' },
+      baseHeaders(),
     )
     expect(response.status).toBe(202)
     expect(await response.text()).toBe('')
   })
 
-  const rejected: [string, () => Promise<Response>, number][] = [
-    ['the body is malformed JSON', () => fetchWithAuth(MCP_PATH, { method: 'POST', body: '{ not json', headers: { 'Content-Type': 'application/json' } }), -32700],
-    ['messages are batched', () => postMcp([modernBody(1, 'tools/list')], modernHeaders('tools/list')), -32600],
-    ['Mcp-Method disagrees with the body', () => postModern(1, 'tools/list', {}, { 'Mcp-Method': 'tools/call' }), -32020],
-    ['Mcp-Name disagrees with the body', () => postModern(1, 'tools/call', { name: 'list_tags', arguments: {} }, { 'Mcp-Name': 'list_links' }), -32020],
-    ['Mcp-Name carries a malformed base64 sentinel', () => postModern(1, 'tools/call', { name: 'list_tags', arguments: {} }, { 'Mcp-Name': '=?base64?not valid base64!!?=' }), -32020],
-    ['the MCP-Protocol-Version header is absent', () => postMcp(modernBody(1, 'tools/list'), { 'Content-Type': 'application/json', 'Mcp-Method': 'tools/list' }), -32020],
-    ['the client capabilities _meta entry is absent', () => postMcp({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: { _meta: { [META_VERSION]: MODERN_VERSION } } }, modernHeaders('tools/list')), -32602],
-  ]
-
-  it.each(rejected)('rejects a request where %s', async (_label, send, code) => {
-    const response = await send()
+  it('rejects malformed JSON with a parse error', async () => {
+    const response = await fetchWithAuth(MCP_PATH, {
+      method: 'POST',
+      body: '{ not json',
+      headers: baseHeaders(),
+    })
     expect(response.status).toBe(400)
-    expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(code)
+    expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(-32700)
   })
 
-  it('reports supported versions for an unknown protocol version', async () => {
+  it('requires the Streamable HTTP Accept header', async () => {
     const response = await postMcp(
-      { jsonrpc: '2.0', id: 1, method: 'tools/list', params: { _meta: { [META_VERSION]: '1900-01-01' } } },
-      { 'Content-Type': 'application/json', 'MCP-Protocol-Version': '1900-01-01', 'Mcp-Method': 'tools/list' },
+      { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
+      { 'Content-Type': 'application/json' },
+    )
+    expect(response.status).toBe(406)
+  })
+
+  it('requires a JSON content type', async () => {
+    const response = await fetchWithAuth(MCP_PATH, {
+      method: 'POST',
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping', params: {} }),
+      headers: { 'Accept': 'application/json, text/event-stream', 'Content-Type': 'text/plain' },
+    })
+    expect(response.status).toBe(415)
+  })
+
+  it('rejects an unsupported protocol version', async () => {
+    const response = await postMcp(
+      { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
+      baseHeaders({ 'Mcp-Protocol-Version': '1900-01-01' }),
     )
     expect(response.status).toBe(400)
-
-    const payload = await response.json() as JsonRpcEnvelope
-    expect(payload.error?.code).toBe(-32022)
-    expect(payload.error?.data.supported).toContain(MODERN_VERSION)
   })
 
-  // `resources/list` was never served; `ping` and `initialize` this revision removed.
-  it.each(['resources/list', 'ping', 'initialize'])('returns 404 with a JSON-RPC error for %s', async (method) => {
-    const response = await postModern(1, method)
-    expect(response.status).toBe(404)
-    expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(-32601)
+  it('returns a JSON-RPC error for unknown methods', async () => {
+    const response = await postRpc(1, 'resources/list')
+    const payload = await response.json() as JsonRpcEnvelope
+    expect(payload.error?.code).toBe(-32601)
   })
 })
 
-describe('/api/mcp discovery', () => {
-  it('answers server/discover with supported versions and capabilities', async () => {
-    const response = await postModern('discover-1', 'server/discover')
+describe('/api/mcp handshake', () => {
+  it('answers initialize without minting a session', async () => {
+    const response = await postInitialize(1)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Mcp-Session-Id')).toBeNull()
+
+    const payload = await response.json() as JsonRpcEnvelope
+    expect(payload.result?.protocolVersion).toBe(PROTOCOL_VERSION)
+    expect(payload.result?.serverInfo.name).toBe('sink')
+    expect(payload.result?.capabilities.tools).toBeDefined()
+    expect(typeof payload.result?.instructions).toBe('string')
+  })
+
+  it.each(LEGACY_VERSIONS)('negotiates legacy protocol version %s', async (version) => {
+    const response = await postInitialize(1, version)
     expect(response.status).toBe(200)
 
     const payload = await response.json() as JsonRpcEnvelope
-    expect(payload.result?.resultType).toBe('complete')
-    expect(payload.result?.supportedVersions).toContain(MODERN_VERSION)
-    expect(payload.result?.capabilities.tools).toBeDefined()
-    expect(payload.result?._meta['io.modelcontextprotocol/serverInfo'].name).toBe('sink')
-    expect(payload.result?.ttlMs).toBeGreaterThan(0)
-    expect(payload.result?.cacheScope).toBe('public')
+    expect(payload.result?.protocolVersion).toBe(version)
+    expect(payload.result?.serverInfo.name).toBe('sink')
+  })
+
+  it('answers ping', async () => {
+    const response = await postRpc(1, 'ping')
+    expect(response.status).toBe(200)
+    expect((await response.json() as JsonRpcEnvelope).result).toEqual({})
   })
 
   it('lists tools with input schemas', async () => {
-    const response = await postModern(1, 'tools/list')
+    const response = await postRpc(1, 'tools/list')
     expect(response.status).toBe(200)
 
     const payload = await response.json() as JsonRpcEnvelope
-    expect(payload.result?.ttlMs).toBeGreaterThan(0)
-    expect(payload.result?.cacheScope).toBe('public')
-
     const names = payload.result?.tools.map((tool: { name: string }) => tool.name)
     expect(names).toContain('create_link')
     expect(names).toContain('get_analytics_metrics')
@@ -206,6 +215,7 @@ describe('/api/mcp tools', () => {
   it.each([
     ['business failures', 'get_link', { slug: `missing-${crypto.randomUUID()}` }, '404'],
     ['invalid arguments', 'create_link', { url: 'not-a-url' }, 'Invalid arguments'],
+    ['unknown tools', 'no_such_tool', {}, 'not found'],
   ] as const)('reports %s as tool errors, not protocol errors', async (_label, tool, args, text) => {
     const { response, payload } = await callTool(tool, args)
     expect(response.status).toBe(200)
@@ -222,12 +232,6 @@ describe('/api/mcp tools', () => {
     expect(payload.result?.structuredContent.links[0].slug).toBe(slug)
   })
 
-  it('rejects an unknown tool with a protocol error', async () => {
-    const response = await postModern(1, 'tools/call', { name: 'no_such_tool', arguments: {} })
-    expect(response.status).toBe(400)
-    expect((await response.json() as JsonRpcEnvelope).error?.code).toBe(-32602)
-  })
-
   it('counts links and lists tags', async () => {
     const { payload: counted } = await callTool('count_links', {})
     expect(typeof counted.result?.structuredContent.count).toBe('number')
@@ -237,48 +241,16 @@ describe('/api/mcp tools', () => {
   })
 })
 
-describe('/api/mcp backward compatibility', () => {
-  it('answers the initialize handshake without minting a session', async () => {
-    const response = await postLegacy(1, 'initialize', {
-      protocolVersion: LEGACY_VERSION,
-      capabilities: {},
-      clientInfo: { name: 'legacy-client', version: '1.0.0' },
-    })
-    expect(response.status).toBe(200)
-    expect(response.headers.get('Mcp-Session-Id')).toBeNull()
-
-    const payload = await response.json() as JsonRpcEnvelope
-    expect(payload.result?.protocolVersion).toBe(LEGACY_VERSION)
-    expect(payload.result?.serverInfo.name).toBe('sink')
-  })
-
-  it('serves tools to initialization-based clients', async () => {
-    const listed = await postLegacy(2, 'tools/list')
-    const listedPayload = await listed.json() as JsonRpcEnvelope
-    expect(listedPayload.result?.tools.length).toBeGreaterThan(0)
-    expect(listedPayload.result?.resultType).toBeUndefined()
-
-    const slug = trackSlug(`mcp-legacy-${crypto.randomUUID()}`)
-    const called = await postLegacy(3, 'tools/call', {
-      name: 'create_link',
-      arguments: { url: 'https://example.com/legacy', slug },
-    })
-    const calledPayload = await called.json() as JsonRpcEnvelope
-    expect(calledPayload.result?.structuredContent.link.slug).toBe(slug)
-  })
-
-  it('still answers ping for initialization-based clients', async () => {
-    const response = await postLegacy(4, 'ping')
-    expect(response.status).toBe(200)
-    expect((await response.json() as JsonRpcEnvelope).result).toEqual({})
-  })
-})
-
 describe('/api/mcp path normalization', () => {
   // The router folds these onto the same handler, and the auth middleware's
   // `/api/` prefix covers every one of them.
   it.each([[`${MCP_PATH}/`, false, 401], [`${MCP_PATH}//`, false, 401], [`${MCP_PATH}/`, true, 200]] as const)('answers %s with auth=%s as %i', async (path, withAuth, status) => {
-    const response = await postMcp(modernBody(1, 'tools/list'), modernHeaders('tools/list'), withAuth, path)
+    const response = await postMcp(
+      { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
+      baseHeaders({ 'Mcp-Protocol-Version': PROTOCOL_VERSION }),
+      withAuth,
+      path,
+    )
     expect(response.status).toBe(status)
   })
 })
@@ -296,6 +268,6 @@ describe('/api/mcp slug isolation', () => {
     expect(redirect.status).toBe(301)
     expect(redirect.headers.get('location')).toBe('https://example.com/slug-isolation')
 
-    expect((await postModern(1, 'tools/list')).status).toBe(200)
+    expect((await postRpc(1, 'tools/list')).status).toBe(200)
   })
 })
