@@ -21,26 +21,10 @@ defineRouteMeta({
   },
 })
 
+// H3 sends a returned web Response through untouched, so the SDK response is
+// passed back directly with only a no-store hint added.
 export default eventHandler(async (event) => {
   const response = await handleMcpPost(event)
-
-  setResponseStatus(event, response.status)
-  response.headers.forEach((value, key) => {
-    if (key.toLowerCase() === 'content-length')
-      return
-    setResponseHeader(event, key, value)
-  })
-  setResponseHeader(event, 'Cache-Control', 'no-store')
-
-  const text = await response.text()
-  if (!text)
-    return null
-
-  setResponseHeader(event, 'Content-Type', 'application/json')
-  try {
-    return JSON.parse(text)
-  }
-  catch {
-    return text
-  }
+  response.headers.set('Cache-Control', 'no-store')
+  return response
 })

@@ -21,7 +21,7 @@ const INSTRUCTIONS = [
  * close over its own `H3Event` so it can call the same server utilities the
  * REST handlers use.
  */
-export function createMcpServer(event: H3Event): McpServer {
+function createMcpServer(event: H3Event): McpServer {
   const server = new SdkMcpServer(SERVER_INFO, {
     capabilities: { tools: {} },
     instructions: INSTRUCTIONS,
@@ -48,17 +48,10 @@ function isAllowedOrigin(event: H3Event): boolean {
   }
 }
 
-function originNotAllowed(): Response {
+function jsonError(status: number, code: number, message: string): Response {
   return Response.json(
-    { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Origin not allowed' } },
-    { status: 403, headers: { 'Content-Type': 'application/json' } },
-  )
-}
-
-function internalError(message: string): Response {
-  return Response.json(
-    { jsonrpc: '2.0', id: null, error: { code: -32603, message } },
-    { status: 500, headers: { 'Content-Type': 'application/json' } },
+    { jsonrpc: '2.0', id: null, error: { code, message } },
+    { status, headers: { 'Content-Type': 'application/json' } },
   )
 }
 
@@ -70,14 +63,14 @@ function internalError(message: string): Response {
  */
 export async function handleMcpPost(event: H3Event): Promise<Response> {
   if (!isAllowedOrigin(event))
-    return originNotAllowed()
+    return jsonError(403, -32600, 'Origin not allowed')
 
   let rawBody: string | undefined
   try {
     rawBody = await readRawBody(event)
   }
   catch {
-    return internalError('Failed to read request body')
+    return jsonError(500, -32603, 'Failed to read request body')
   }
 
   const incoming = getHeaders(event)
@@ -98,7 +91,7 @@ export async function handleMcpPost(event: H3Event): Promise<Response> {
     url = getRequestURL(event).href
   }
   catch {
-    return internalError('Failed to resolve request URL')
+    return jsonError(500, -32603, 'Failed to resolve request URL')
   }
 
   const request = new Request(url, {
@@ -118,7 +111,7 @@ export async function handleMcpPost(event: H3Event): Promise<Response> {
     return await transport.handleRequest(request)
   }
   catch (error) {
-    return internalError(error instanceof Error ? error.message : 'Internal server error')
+    return jsonError(500, -32603, error instanceof Error ? error.message : 'Internal server error')
   }
   finally {
     try {

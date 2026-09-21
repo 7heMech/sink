@@ -35,14 +35,8 @@ interface McpToolDefinition {
   handler: (event: H3Event, args: Record<string, unknown>) => Promise<unknown>
 }
 
-export interface McpTool extends McpToolDefinition {
+interface McpTool extends McpToolDefinition {
   title: string
-}
-
-export interface McpToolResult {
-  content: { type: 'text', text: string }[]
-  structuredContent?: unknown
-  isError?: boolean
 }
 
 /** Create and upsert generate a slug when one is omitted; the other write fields match the edit contract. */
@@ -181,7 +175,7 @@ const analyticsTools: McpToolDefinition[] = [
  * Titles are the display form of the name (`list_links` becomes `List links`),
  * and annotations fall back to the hints every Sink tool shares.
  */
-export const mcpTools: McpTool[] = [...linkTools, ...analyticsTools].map(tool => ({
+const mcpTools: McpTool[] = [...linkTools, ...analyticsTools].map(tool => ({
   ...tool,
   title: tool.name.replace(/_/g, ' ').replace(/^./, character => character.toUpperCase()),
   annotations: { readOnlyHint: false, openWorldHint: false, ...tool.annotations },
@@ -190,39 +184,11 @@ export const mcpTools: McpTool[] = [...linkTools, ...analyticsTools].map(tool =>
 const gatedTools = new Set(linkTools.map(tool => tool.name))
 
 /**
- * Runs a tool and shapes the outcome as a tool result. Validation and business
- * failures are returned with `isError` so the calling model can self-correct.
- * The SDK validates arguments before the callback runs and converts unknown
- * tools to `isError` results itself, so only tool-level failures are shaped here.
- */
-export async function callMcpTool(event: H3Event, tool: McpTool, args: Record<string, unknown>): Promise<McpToolResult> {
-  try {
-    if (gatedTools.has(tool.name))
-      await assertLinkStoreReady(event)
-
-    const data = await tool.handler(event, args)
-    // The payload also ships as `structuredContent`, so the text block stays
-    // compact; it exists for clients that predate structured results.
-    return {
-      content: [{ type: 'text', text: JSON.stringify(data) }],
-      structuredContent: data,
-    }
-  }
-  catch (error) {
-    const failure = error as { statusCode?: number, statusMessage?: string, message?: string }
-    const text = error instanceof z.ZodError
-      ? `Invalid arguments for ${tool.name}: ${error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`
-      : `${tool.name} failed: ${failure.statusCode ? `${failure.statusCode} ` : ''}${failure.statusMessage || failure.message || 'Unknown error'}`
-
-    return { content: [{ type: 'text', text }], isError: true }
-  }
-}
-
-/**
- * Registers the thirteen curated Sink tools on an SDK `McpServer`. The server
- * is created per request so each tool closes over its own `H3Event`; the SDK
- * advertises the zod contracts directly and validates arguments before the
- * callback runs.
+ * Registers the curated Sink tools on an SDK `McpServer`. The server is created
+ * per request so each tool closes over its own `H3Event`; the SDK advertises the
+ * zod contracts directly and validates arguments before the callback runs.
+ * Validation and business failures are returned with `isError` so the calling
+ * model can self-correct.
  */
 export function registerMcpTools(server: McpServer, event: H3Event): void {
   for (const tool of mcpTools) {
@@ -232,7 +198,23 @@ export function registerMcpTools(server: McpServer, event: H3Event): void {
       inputSchema: tool.argsSchema as any,
       annotations: tool.annotations,
     }, async (args: any) => {
-      return await callMcpTool(event, tool, (args ?? {}) as Record<string, unknown>) as any
+      try {
+        if (gatedTools.has(tool.name))
+          await assertLinkStoreReady(event)
+
+        const data = await tool.handler(event, (args ?? {}) as Record<string, unknown>)
+        // The payload also ships as `structuredContent`, so the text block stays
+        // compact; it exists for clients that predate structured results.
+        return { content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data } as any
+      }
+      catch (error) {
+        const failure = error as { statusCode?: number, statusMessage?: string, message?: string }
+        const text = error instanceof z.ZodError
+          ? `Invalid arguments for ${tool.name}: ${error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`
+          : `${tool.name} failed: ${failure.statusCode ? `${failure.statusCode} ` : ''}${failure.statusMessage || failure.message || 'Unknown error'}`
+
+        return { content: [{ type: 'text', text }], isError: true }
+      }
     })
   }
 }
